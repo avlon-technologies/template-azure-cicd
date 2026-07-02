@@ -1,0 +1,20 @@
+name: CI/CD — Hotfix → STG
+
+on:
+  push:
+    branches:
+      - hotfix/**
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml
+
+  deploy:
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: stg
+      webapp-name: stg-ue2-api-fc-base-app
+      azure-client-id: '' # TODO: stg App Registration client ID
+      build-label: ${{ needs.build.outputs.build-label }}

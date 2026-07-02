@@ -1,0 +1,79 @@
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: >
+          Optional version override for release branches (e.g. 1.1.0-rc.5).
+          Defaults to YYYYMMDD.run_number when omitted (develop, hotfix).
+        type: string
+        required: false
+        default: ''
+      solution:
+        description: Solution file to restore and build
+        type: string
+        required: false
+        default: 'cicd-demo.sln'
+    outputs:
+      build-label:
+        description: Resolved build label used for assembly version and deployment tag
+        value: ${{ jobs.build.outputs.build-label }}
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    outputs:
+      build-label: ${{ steps.set-label.outputs.value }}
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set build label
+        id: set-label
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "value=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=$(date +'%Y%m%d').${{ github.run_number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.solution }}
+
+      - name: Build
+        run: dotnet build ${{ inputs.solution }} --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Api.Test/Api.Test.csproj --configuration Release --no-build --logger trx
+
+      - name: Publish
+        run: >
+          dotnet publish Api/Api.csproj
+          --configuration Release
+          --no-build
+          --output ./publish
+          /p:InformationalVersion=${{ steps.set-label.outputs.value }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp-publish
+          path: ./publish
+          retention-days: 1

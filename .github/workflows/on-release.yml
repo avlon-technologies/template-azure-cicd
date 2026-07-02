@@ -1,0 +1,51 @@
+name: CI/CD — Release → STG
+
+on:
+  push:
+    branches:
+      - release/**
+      - milestone/**
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version label (e.g. 1.1.0-rc.1)'
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "value=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == release/* ]]; then
+              echo "value=${REF#release/}-build.${{ github.run_number }}" >> $GITHUB_OUTPUT
+            else
+              echo "value=ms-${REF#milestone/}.${{ github.run_number }}" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/_build.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+
+  deploy:
+    # Only deploy when the release coordinator manually dispatches — not on every push.
+    if: github.event_name == 'workflow_dispatch'
+    needs: [prepare, build]
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: stg
+      webapp-name: stg-ue2-api-fc-base-app
+      azure-client-id: '' # TODO: stg App Registration client ID
+      build-label: ${{ needs.build.outputs.build-label }}

@@ -1,0 +1,20 @@
+name: CI/CD — Develop → DEV
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml
+
+  deploy:
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: dev
+      webapp-name: dev-ue2-api-fc-base-app
+      azure-client-id: '' # TODO: dev App Registration client ID
+      build-label: ${{ needs.build.outputs.build-label }}

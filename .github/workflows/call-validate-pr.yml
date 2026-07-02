@@ -1,0 +1,32 @@
+name: Validate PR Title, Milestone, Issue Link and Project
+
+on:
+  pull_request_target:
+    types: [opened, edited, milestoned, demilestoned, reopened]
+    branches:
+      - main
+      - development
+      - '**/feat*'
+      - 'milestone/**'
+  
+  workflow_dispatch:
+    inputs:
+      validate_all:
+        description: 'Validate all open PRs'
+        required: false
+        default: false
+        type: boolean
+  
+  push:
+    branches: [development, main]
+    paths:
+      - .github/workflows/call-validate-pr.yml
+
+jobs:
+  validate:
+    uses: DBDHub/sna_common_workflows/.github/workflows/validate-pr.yml@main
+    with:
+      validate_all: ${{ github.event_name == 'workflow_dispatch' && inputs.validate_all || false }}
+    secrets:
+      APP_ID: ${{ vars.APP_ID }}
+      APP_PEM: ${{ secrets.APP_PEM }}
