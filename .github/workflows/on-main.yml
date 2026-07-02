@@ -15,6 +15,6 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: prod
-      webapp-name: prod-ue2-api-fc-base-app
+      webapp-name: prod-demo-helloworld-api
       azure-client-id: '' # TODO: prod App Registration client ID
       build-label: ${{ needs.build.outputs.build-label }}

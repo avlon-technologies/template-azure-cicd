@@ -37,6 +37,10 @@ Release specifics (`on-release.yml`): pushes only build (deploy is gated on `wor
 
 `call-validate-pr.yml` delegates PR title/milestone/issue-link validation to the shared `DBDHub/sna_common_workflows` repo; it needs the `APP_ID` variable and `APP_PEM` secret.
 
+## Infrastructure
+
+Lives in a separate repo: `../cicd-infrastructure` (see its README). Terraform provisions, per environment (`dev` | `qa` | `stg` | `prod`), a resource group `<env>-demo-helloworld-rg` with its own VNet, an S1 App Service `<env>-demo-helloworld-api` (the names the deploy workflows target), and a Key Vault — plus one shared Application Gateway exposing all environments (one frontend port per env: prod :80, dev :8081, qa :8082, stg :8083).
+
 ## Known gaps
 
 All three `azure-client-id` inputs in the `on-*` entry workflows are empty `# TODO` placeholders — deploys will fail at Azure login until the App Registration client IDs are filled in.

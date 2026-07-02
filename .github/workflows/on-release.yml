@@ -46,6 +46,6 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
-      webapp-name: stg-ue2-api-fc-base-app
+      webapp-name: stg-demo-helloworld-api
       azure-client-id: '' # TODO: stg App Registration client ID
       build-label: ${{ needs.build.outputs.build-label }}
