@@ -12,6 +12,11 @@ jobs:
 
   deploy:
     needs: build
+    # Callers must grant what the reusable workflow's job requests — the repo
+    # default token is read-only and called workflows cannot elevate it.
+    permissions:
+      id-token: write
+      contents: write
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: prod

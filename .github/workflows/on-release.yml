@@ -43,6 +43,11 @@ jobs:
     # Only deploy when the release coordinator manually dispatches — not on every push.
     if: github.event_name == 'workflow_dispatch'
     needs: [prepare, build]
+    # Callers must grant what the reusable workflow's job requests — the repo
+    # default token is read-only and called workflows cannot elevate it.
+    permissions:
+      id-token: write
+      contents: write
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
