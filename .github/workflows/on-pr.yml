@@ -1,0 +1,14 @@
+name: PR Validation
+
+# Builds and tests every PR targeting develop or main. The "build / Build &
+# Test" check is required by the branch rulesets before merging.
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml

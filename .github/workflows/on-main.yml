@@ -45,6 +45,8 @@ jobs:
       webapp-name: prod-demo-helloworld-api
       azure-client-id: 279d0dec-5668-4d48-a333-4186cde9f859
       build-label: ${{ needs.build.outputs.build-label }}
+      # Blue/green: deploy to the staging slot, smoke test, then swap.
+      slot-swap: true
 
   release:
     name: Create GitHub Release
