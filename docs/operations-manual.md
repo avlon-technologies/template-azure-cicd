@@ -8,9 +8,11 @@ How to build, deploy, release, and verify this application across environments.
 |---|---|---|---|---|
 | dev | `dev-demo-helloworld-api` | https://dev-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8081/ | push to `develop` (automatic) |
 | stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8082/ | manual dispatch of a release, or push to `hotfix/**` |
-| prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | http://52.139.34.97/ | merge PR to `main` (automatic) |
+| prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | http://52.139.34.97/ | merge PR to `main` (automatic, blue/green slot swap) |
 
-All merges to `develop` and `main` must go through a pull request (enforced by repository rulesets).
+**Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject.
+
+Every deploy, in every environment, ends with an automatic **smoke test** (`GET /v1/hello` must return `Hello World!`) — a deploy that leaves the app broken fails the pipeline instead of reporting success.
 
 ## Deploy to dev (automatic)
 
@@ -66,12 +68,13 @@ Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 1. Extracts `1.1.0` from the merge commit subject
 2. Builds with that version (stamped into the assembly's `InformationalVersion`)
-3. Deploys to prod and tags the commit `build/prod/1.1.0`
-4. Creates GitHub Release **v1.1.0** with generated notes
+3. Deploys **blue/green**: the build goes to the `staging` slot first, is smoke-tested there, and only then swapped into production — a bad build never reaches users, and the previous build stays in the slot for instant rollback (swap back)
+4. Smoke-tests production after the swap and tags the commit `build/prod/1.1.0`
+5. Creates GitHub Release **v1.1.0** with generated notes
 
 > **Always use a merge commit for release PRs.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A squash merge hides the branch name, so the build falls back to a date label and no GitHub Release is created. Squash also breaks the back-merge below.
 
-5. Opens a **back-merge PR** from the release branch into `develop`, so stabilization fixes aren't lost
+6. Opens a **back-merge PR** from the release branch into `develop`, so stabilization fixes aren't lost
 
 The back-merge PR is created automatically but merged manually — review it (conflicts with ongoing develop work are possible), merge with a merge commit, then delete the release branch:
 
@@ -101,9 +104,22 @@ gh release create v1.1.1 --target main --generate-notes
 
 Back-merge the hotfix to `develop` afterward, same as a release.
 
+## Roll back production
+
+The staging slot holds the *previous* production build after every swap. To roll back, swap again:
+
+```
+az webapp deployment slot swap --resource-group prod-demo-helloworld-rg \
+  --name prod-demo-helloworld-api --slot staging --target-slot production
+```
+
+This is near-instant (no rebuild, no redeploy). For dev/stg (no slots), re-run an earlier successful workflow run or revert the commit.
+
 ## Verify a deployment
 
-- **Endpoints** — hit the URL from the table above; the API returns `Hello World!` at `/`.
+- **Run summary** — every deploy run's summary page shows a "🚀 Deployed" card with the app, Swagger, and API URLs.
+- **Swagger** — `<app-url>/swagger` shows the exact build label, linked commit SHA, and environment of what's running.
+- **Smoke test** — already ran automatically; a green deploy job means the app answered correctly.
 - **Deployments view** — repo home → right sidebar → **Deployments** (or `/deployments`): per-environment history.
 - **Tags** — `git fetch --tags && git tag -l 'build/*'`: every successful deploy tags the exact commit as `build/<env>/<label>`.
 - **Releases** — repo **Releases** page lists `vX.Y.Z` with generated notes.
@@ -127,7 +143,10 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Deploy fails: "Resource … doesn't exist" | The target App Service hasn't been provisioned — run `terraform apply` for that environment in `../cicd-infrastructure` |
 | Deploy fails at "Login to Azure" | Federated credential / identity problem — see `docs/workload-identity-federation.md` |
 | Push to `develop`/`main` rejected (GH013) | Rulesets require a PR — open one instead of pushing directly |
-| Release merged but prod tag is a date, no GitHub Release | The PR was squash-merged; the version is only detected on merge commits |
+| Release merged but prod tag is a date, no GitHub Release | The PR was squash-merged; the version is only detected on merge commits (main's ruleset now blocks squash, so this should no longer occur) |
+| PR can't merge: "required status check missing" | Wait for the **build / Build & Test** check from `on-pr.yml` to pass; if it never appears, the PR predates the check — push any commit to re-trigger |
+| Prod deploy failed at "Smoke test staging slot" | The new build is unhealthy — **production was not touched** (swap never happened). Fix and redeploy; nothing to roll back |
+| Deploy failed at "Smoke test deployment" (dev/stg) | The build deployed but isn't answering — check App Service logs; the previous build is gone, so fix forward or re-run the last good workflow run |
 
 ## Infrastructure changes
 

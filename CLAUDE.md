@@ -21,8 +21,9 @@ Run locally: `dotnet run --project Api`
 
 Two reusable workflows (prefixed `_`) are composed by branch-triggered entry workflows:
 
-- `_build.yml` — build, test, publish, upload `webapp-publish` artifact. Accepts an optional `version` input; otherwise the build label defaults to `YYYYMMDD.<run_number>`. Outputs `build-label`.
-- `_deploy.yml` — downloads the artifact, logs into Azure via OIDC (`azure-client-id` input), deploys to App Service, and tags the commit `build/<environment>/<build-label>`. Requires a GitHub environment (`dev` | `stg` | `prod`).
+- `_build.yml` — build, test, publish, upload `webapp-publish` artifact. Accepts an optional `version` input; otherwise the build label defaults to `YYYYMMDD.<run_number>`. The label is stamped into `InformationalVersion` at the *build* step (publish runs `--no-build`) and surfaces in Swagger. Outputs `build-label`.
+- `_deploy.yml` — downloads the artifact, logs into Azure via OIDC (`azure-client-id` input), deploys to App Service (with `slot-swap: true`, used by prod: deploy to `staging` slot → smoke test → swap), smoke-tests `/v1/hello`, prints the URL to the run summary, and tags the commit `build/<environment>/<build-label>`. Requires a GitHub environment (`dev` | `stg` | `prod`).
+- `on-pr.yml` — builds/tests PRs to `develop`/`main`; the check is required by rulesets, which also enforce PR-only merges (merge-commit-only on `main`).
 
 Branch → environment mapping:
 
