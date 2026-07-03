@@ -124,11 +124,21 @@ jobs:
           elif [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
             echo "Back-merge PR already open — skipping."
           else
-            gh pr create \
+            # Only "no commits between" is benign; anything else (e.g. the
+            # "Actions is not permitted to create PRs" repo setting) must
+            # fail loudly instead of masquerading as "nothing to merge".
+            OUTPUT=$(gh pr create \
               --repo "$GITHUB_REPOSITORY" \
               --base develop \
               --head "$BRANCH" \
               --title "Back-merge release $VERSION into develop" \
-              --body "Automated follow-up to the v$VERSION production release: brings stabilization fixes from \`$BRANCH\` back into \`develop\`. Merge with a merge commit. If this PR shows no diff, develop already contains the release and it can be closed." \
-              || echo "No back-merge needed (develop already contains $BRANCH)."
+              --body "Automated follow-up to the v$VERSION production release: brings stabilization fixes from \`$BRANCH\` back into \`develop\`. Merge with a merge commit." \
+              2>&1) && echo "$OUTPUT" || {
+                if echo "$OUTPUT" | grep -q "No commits between"; then
+                  echo "No back-merge needed (develop already contains $BRANCH)."
+                else
+                  echo "::error::Back-merge PR creation failed: $OUTPUT"
+                  exit 1
+                fi
+              }
           fi
