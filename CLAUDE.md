@@ -39,7 +39,7 @@ Release specifics (`on-release.yml`): pushes only build (deploy is gated on `wor
 
 ## Infrastructure
 
-Lives in a separate repo: `../cicd-infrastructure` (see its README). Terraform provisions, per environment (`dev` | `qa` | `stg` | `prod`), a resource group `<env>-demo-helloworld-rg` with its own VNet, an App Service `<env>-demo-helloworld-api` (B1 plan; P0v3 with slots for prod) (the names the deploy workflows target), and a Key Vault — plus one shared Application Gateway exposing all environments (one frontend port per env: prod :80, dev :8081, qa :8082, stg :8083).
+Lives in a separate repo: `../cicd-infrastructure` (see its README). Terraform provisions, per environment (`dev` | `stg` | `prod`), a resource group `<env>-demo-helloworld-rg` with its own VNet, an App Service `<env>-demo-helloworld-api` (B1 plan; P0v3 with slots for prod) (the names the deploy workflows target), and a Key Vault — plus one shared Application Gateway exposing all environments (one frontend port per env: prod :80, dev :8081, stg :8082).
 
 ## Deploy identity
 
