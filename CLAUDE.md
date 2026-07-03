@@ -25,6 +25,8 @@ Two reusable workflows (prefixed `_`) are composed by branch-triggered entry wor
 - `_deploy.yml` — downloads the artifact, logs into Azure via OIDC (`azure-client-id` input), deploys to App Service (with `slot-swap: true`, used by prod: deploy to `staging` slot → smoke test → swap), smoke-tests `/v1/hello`, prints the URL to the run summary, and tags the commit `build/<environment>/<build-label>`. Requires a GitHub environment (`dev` | `stg` | `prod`).
 - `on-pr.yml` — builds/tests PRs to `develop`/`main`; the check is required by rulesets, which also enforce PR-only merges (merge-commit-only on `main`).
 
+Pipeline behavior also depends on repo settings outside these files: rulesets, workflow permissions (default token read-only; "Actions can create PRs" enabled for the back-merge step), and the `AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` variables — see the "Repository settings" section of `docs/operations-manual.md`. Gotcha: jobs downstream of the promotion path's skipped `build` job need explicit `!failure() && !cancelled()` conditions (implicit `success()` fails on skipped ancestors).
+
 Branch → environment mapping:
 
 | Entry workflow | Trigger branches | Environment / App Service |
