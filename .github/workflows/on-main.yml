@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to redeploy to prod (e.g. 1.6.0). Leave empty to redeploy current main.'
+        required: false
+        type: string
 
 jobs:
   prepare:
@@ -17,28 +22,46 @@ jobs:
     steps:
       - name: Extract version from merge commit
         id: version
-        # When a release/X.Y.Z, hotfix/X.Y.Z, or support/X.Y.Z branch merges
-        # to main (merge commit, not squash), stamp the build with that version.
-        # Otherwise empty → _build.yml falls back to the YYYYMMDD.run_number label.
-        # Message is passed via env, never interpolated into the script.
+        # Push: parse the merge commit subject for a release/hotfix/support branch name.
+        # Dispatch with version: use the supplied version directly (rollback path).
+        # Dispatch without version: no version → _build.yml falls back to date label.
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d/ -f2 || true)
-          echo "value=$VERSION" >> $GITHUB_OUTPUT
-          echo "Resolved version: '${VERSION:-<none, using date label>}'"
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "value=$INPUT_VERSION" >> $GITHUB_OUTPUT
+            echo "Rollback dispatch: targeting version $INPUT_VERSION"
+          else
+            VERSION=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d/ -f2 || true)
+            echo "value=$VERSION" >> $GITHUB_OUTPUT
+            echo "Resolved version: '${VERSION:-<none, using date label>}'"
+          fi
 
       - name: Locate promotable release artifact
         id: promote
-        # Build-once-promote-many: the merge commit's second parent is the
-        # release branch head that was rc-tested on staging. If its build
-        # artifact (webapp-<sha>, 90-day retention) still exists, prod ships
-        # that exact artifact and the build job is skipped. Fallback: rebuild.
         if: steps.version.outputs.value != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          RELEASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.parents[1].sha // empty')
+          if [ -n "$INPUT_VERSION" ]; then
+            # Rollback path: resolve the merge commit SHA from the v<version> release tag,
+            # then walk to its second parent (the release branch head) to find the artifact.
+            MERGE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/v$INPUT_VERSION" \
+              --jq '.sha' 2>/dev/null || true)
+            if [ -z "$MERGE_SHA" ]; then
+              echo "::error::Tag v$INPUT_VERSION not found. Verify the version exists on the Releases page."
+              exit 1
+            fi
+            RELEASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$MERGE_SHA" \
+              --jq '.parents[1].sha // empty')
+          else
+            # Normal push path: the release branch head is the merge commit's second parent.
+            RELEASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
+              --jq '.parents[1].sha // empty')
+          fi
+
           if [ -z "$RELEASE_SHA" ]; then
             echo "Not a merge commit — will rebuild."
             exit 0
@@ -47,10 +70,14 @@ jobs:
           RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
           if [ -n "$RUN_ID" ]; then
-            echo "Promoting stg-tested artifact $NAME from run $RUN_ID — build will be skipped."
+            echo "Promoting artifact $NAME from run $RUN_ID — build will be skipped."
             echo "artifact=$NAME" >> $GITHUB_OUTPUT
             echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
           else
+            if [ -n "$INPUT_VERSION" ]; then
+              echo "::error::Artifact for v$INPUT_VERSION has expired (90-day retention). Re-dispatch the release pipeline from the release branch to produce a fresh artifact."
+              exit 1
+            fi
             echo "No unexpired artifact for $RELEASE_SHA (no rc dispatched, or expired) — will rebuild."
           fi
 
@@ -84,11 +111,9 @@ jobs:
 
   release:
     name: Create GitHub Release
-    # Only when the deploy succeeded and this push was a release merge.
-    # !failure() && !cancelled() instead of implicit success(): success()
-    # is false when ANY ancestor job was skipped, and on the promotion path
-    # the build job is skipped by design.
-    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.version != '' }}
+    # Only when the deploy succeeded and this was a release merge push — not a
+    # manual redeploy/rollback dispatch (release already exists for those versions).
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.version != '' && github.event_name == 'push' }}
     needs: [prepare, deploy]
     runs-on: ubuntu-latest
     permissions:
