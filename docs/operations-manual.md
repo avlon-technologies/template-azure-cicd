@@ -10,7 +10,7 @@ How to build, deploy, release, and verify this application across environments.
 | stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8082/ | manual dispatch of a release, or push to `hotfix/**` |
 | prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | http://52.139.34.97/ | merge PR to `main` (automatic, blue/green slot swap) |
 
-**Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject.
+**Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*` or `hotfix/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
 Every deploy, in every environment, ends with an automatic **smoke test** (`GET /v1/hello` must return `Hello World!`) — a deploy that leaves the app broken fails the pipeline instead of reporting success.
 
