@@ -7,11 +7,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Extract release version from merge commit
+        id: version
+        # When a release/X.Y.Z branch merges to main (merge commit, not
+        # squash), stamp the build with that version. Otherwise empty →
+        # _build.yml falls back to the YYYYMMDD.run_number label.
+        # Message is passed via env, never interpolated into the script.
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          VERSION=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE 'release/[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d/ -f2 || true)
+          echo "value=$VERSION" >> $GITHUB_OUTPUT
+          echo "Resolved version: '${VERSION:-<none, using date label>}'"
+
   build:
+    needs: prepare
     uses: ./.github/workflows/_build.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
 
   deploy:
-    needs: build
+    needs: [prepare, build]
     # Callers must grant what the reusable workflow's job requests — the repo
     # default token is read-only and called workflows cannot elevate it.
     permissions:
@@ -23,3 +45,27 @@ jobs:
       webapp-name: prod-demo-helloworld-api
       azure-client-id: 279d0dec-5668-4d48-a333-4186cde9f859
       build-label: ${{ needs.build.outputs.build-label }}
+
+  release:
+    name: Create GitHub Release
+    # Only when the deploy succeeded and this push was a release merge.
+    if: needs.prepare.outputs.version != ''
+    needs: [prepare, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release v${{ needs.prepare.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release v$VERSION already exists — skipping."
+          else
+            gh release create "v$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "v$VERSION" \
+              --generate-notes
+          fi
