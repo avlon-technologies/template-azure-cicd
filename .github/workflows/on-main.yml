@@ -21,5 +21,5 @@ jobs:
     with:
       environment: prod
       webapp-name: prod-demo-helloworld-api
-      azure-client-id: 3d291ad9-9d36-4f52-be2c-6b385a085ffb
+      azure-client-id: 279d0dec-5668-4d48-a333-4186cde9f859
       build-label: ${{ needs.build.outputs.build-label }}

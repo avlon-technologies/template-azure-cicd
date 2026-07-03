@@ -52,5 +52,5 @@ jobs:
     with:
       environment: stg
       webapp-name: stg-demo-helloworld-api
-      azure-client-id: 3d291ad9-9d36-4f52-be2c-6b385a085ffb
+      azure-client-id: e205fdd4-b556-4f37-aa20-a07b68c55f2f
       build-label: ${{ needs.build.outputs.build-label }}
