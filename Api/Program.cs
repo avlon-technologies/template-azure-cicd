@@ -4,10 +4,18 @@ using Asp.Versioning;
 var builder = WebApplication.CreateBuilder(args);
 
 // The CI build stamps its build label (e.g. 1.2.0, 1.2.0-rc.1, 20260703.5)
-// into InformationalVersion; the SDK appends the commit SHA when available.
-var buildLabel = Assembly.GetExecutingAssembly()
+// into InformationalVersion; the SDK appends the commit SHA as SemVer build
+// metadata ("+<sha>"). Split them: the label is the display version, the SHA
+// (shortened, linked) goes in the description.
+var informationalVersion = Assembly.GetExecutingAssembly()
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
     .InformationalVersion ?? "unknown";
+var labelAndSha = informationalVersion.Split('+', 2);
+var buildLabel = labelAndSha[0];
+var commitSha = labelAndSha.Length > 1 ? labelAndSha[1] : null;
+var commitNote = commitSha is null
+    ? ""
+    : $" — commit: [`{commitSha[..Math.Min(8, commitSha.Length)]}`](https://github.com/pixelbits-mk/cicd-demo/commit/{commitSha})";
 
 builder.Services
     .AddApiVersioning(options =>
@@ -30,7 +38,7 @@ builder.Services.AddOpenApi(options =>
         document.Info.Title = "cicd-demo API";
         document.Info.Version = buildLabel;
         document.Info.Description =
-            $"Deployed build: **{buildLabel}** — environment: **{builder.Environment.EnvironmentName}**";
+            $"Deployed build: **{buildLabel}**{commitNote} — environment: **{builder.Environment.EnvironmentName}**";
         return Task.CompletedTask;
     });
 });
