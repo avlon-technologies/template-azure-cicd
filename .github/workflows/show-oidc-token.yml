@@ -1,0 +1,31 @@
+name: Show OIDC Token Claims
+
+# Educational: fetches the OIDC JWT that GitHub mints for this job and prints
+# its decoded header and claims. The signature/raw token is NOT printed — it
+# is a live (if short-lived) credential.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  show-token:
+    runs-on: ubuntu-latest
+    # Same environment the real dev deploys use, so the subject claim matches.
+    environment: dev
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Request and decode OIDC token
+        run: |
+          RESPONSE=$(curl -sSL -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange")
+          JWT=$(echo "$RESPONSE" | jq -r '.value')
+
+          b64d() { local s="${1//-/+}"; s="${s//_//}"; while [ $((${#s} % 4)) -ne 0 ]; do s="$s="; done; echo "$s" | base64 -d; }
+
+          echo "=== HEADER (how it's signed) ==="
+          b64d "$(echo "$JWT" | cut -d. -f1)" | jq .
+          echo ""
+          echo "=== CLAIMS (what GitHub asserts about this job) ==="
+          b64d "$(echo "$JWT" | cut -d. -f2)" | jq .
