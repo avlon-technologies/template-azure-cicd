@@ -65,6 +65,7 @@ api.MapGet("/hello", () => "Hello World!")
     .WithSummary("Returns the hello-world greeting.")
     .MapToApiVersion(new ApiVersion(1));
 
+// this is an update
 // OpenAPI spec + Swagger UI are deliberately enabled in every environment,
 // including prod (this is a demo API with no sensitive surface).
 app.MapOpenApi(); // serves /openapi/v1.json
