@@ -54,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - name: Create release v${{ needs.prepare.outputs.version }}
         env:
@@ -68,4 +69,27 @@ jobs:
               --target "$GITHUB_SHA" \
               --title "v$VERSION" \
               --generate-notes
+          fi
+
+      - name: Open back-merge PR to develop
+        # Bookkeeping only — merging stays a human decision (conflicts with
+        # ongoing develop work are possible). Skips gracefully if the release
+        # branch is already gone or develop already contains it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          BRANCH="release/$VERSION"
+          if ! gh api "repos/$GITHUB_REPOSITORY/branches/$BRANCH" > /dev/null 2>&1; then
+            echo "Branch $BRANCH no longer exists — skipping back-merge PR."
+          elif [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            echo "Back-merge PR already open — skipping."
+          else
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base develop \
+              --head "$BRANCH" \
+              --title "Back-merge release $VERSION into develop" \
+              --body "Automated follow-up to the v$VERSION production release: brings stabilization fixes from \`$BRANCH\` back into \`develop\`. Merge with a merge commit. If this PR shows no diff, develop already contains the release and it can be closed." \
+              || echo "No back-merge needed (develop already contains $BRANCH)."
           fi

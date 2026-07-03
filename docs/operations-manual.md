@@ -71,15 +71,16 @@ Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 > **Always use a merge commit for release PRs.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A squash merge hides the branch name, so the build falls back to a date label and no GitHub Release is created. Squash also breaks the back-merge below.
 
-Then back-merge so `develop` picks up any fixes made during stabilization, and delete the branch:
+5. Opens a **back-merge PR** from the release branch into `develop`, so stabilization fixes aren't lost
+
+The back-merge PR is created automatically but merged manually — review it (conflicts with ongoing develop work are possible), merge with a merge commit, then delete the release branch:
 
 ```
-gh pr create --base develop --head release/1.1.0 --title "Back-merge release 1.1.0"
-gh pr merge --merge
+gh pr merge <back-merge-pr> --merge
 git push origin --delete release/1.1.0
 ```
 
-(If nothing landed on the release branch after it was cut, the back-merge PR will be empty and can be skipped.)
+(If nothing landed on the release branch after it was cut, the PR will show no diff or won't be created — just delete the branch.)
 
 ## Hotfix production
 
