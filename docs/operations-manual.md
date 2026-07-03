@@ -7,10 +7,10 @@ How to build, deploy, release, and verify this application across environments.
 | Environment | App Service | Direct URL | Via shared gateway | Deployed by |
 |---|---|---|---|---|
 | dev | `dev-demo-helloworld-api` | https://dev-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8081/ | push to `develop` (automatic) |
-| stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8082/ | manual dispatch of a release, or push to `hotfix/**` |
+| stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8082/ | manual dispatch of a release, hotfix, or support pipeline |
 | prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | http://52.139.34.97/ | merge PR to `main` (automatic, blue/green slot swap) |
 
-**Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*` or `hotfix/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
+**Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*`, `hotfix/*`, or `support/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
 Every deploy, in every environment, ends with an automatic **smoke test** (`GET /v1/hello` must return `Hello World!`) — a deploy that leaves the app broken fails the pipeline instead of reporting success.
 
@@ -24,6 +24,15 @@ gh pr merge --merge
 ```
 
 The build is labeled `YYYYMMDD.<run_number>` and the deployed commit is tagged `build/dev/<label>`.
+
+To manually redeploy a previous build to dev (e.g. to retry a failed deploy with the same label):
+
+**From the command line:**
+```
+gh workflow run on-develop.yml --ref develop -f build-label=20260703.32
+```
+
+**From the UI:** Actions → **CI/CD — Develop → DEV** → Run workflow → enter the build label (e.g. `20260703.32`). The label must correspond to an existing `build/dev/<label>` tag — the pipeline fails fast if it doesn't. A fresh build of HEAD is stamped with that label and deployed; leave the input empty to build and deploy HEAD normally.
 
 ## Cut a release
 
@@ -137,14 +146,26 @@ gh pr merge --merge
 
 ## Roll back production
 
-The staging slot holds the *previous* production build after every swap. To roll back, swap again:
+**Immediate rollback (previous build only):** The staging slot holds the previous production build after every swap. To roll back, swap again:
 
 ```
 az webapp deployment slot swap --resource-group prod-demo-helloworld-rg \
   --name prod-demo-helloworld-api --slot staging --target-slot production
 ```
 
-This is near-instant (no rebuild, no redeploy). For dev/stg (no slots), re-run an earlier successful workflow run or revert the commit.
+This is near-instant (no rebuild, no redeploy).
+
+**Rollback to any previously released version:** Dispatch `on-main.yml` with the target version:
+
+```
+gh workflow run on-main.yml --ref main -f version=1.5.0
+```
+
+**From the UI:** Actions → **CI/CD — Main → PROD** → Run workflow → enter the version (e.g. `1.5.0`). The pipeline resolves the `v<version>` release tag, promotes the artifact that was stg-tested for that release (same artifact promotion as a normal release merge), deploys via the blue/green slot swap, and tags the commit `build/prod/<version>`. No new GitHub Release is created — only push-triggered runs create releases.
+
+The artifact must be within its 90-day retention window. If it has expired, the pipeline fails with an error instructing you to re-dispatch the release pipeline from the release branch to produce a fresh artifact.
+
+**For dev/stg (no slots):** Re-run an earlier successful workflow run or revert the commit.
 
 ## Verify a deployment
 
@@ -183,6 +204,7 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Back-merge PR wasn't created after a release | Check the release job's "Open back-merge PR" step log. If it says "not permitted to create pull requests", re-enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** |
 | rc dispatch fails at "Resolve and validate version" | The version label doesn't match the release branch (e.g. `1.2.0-rc.1` dispatched from `release/1.3.0`). Use `<branch-version>` or `<branch-version>-<pre-release>` |
 | Re-dispatch with same label rebuilds instead of reusing artifact | The prior `webapp-<sha>` artifact has expired (90-day retention). A fresh build is the correct fallback — the new artifact will be used for any subsequent redeploys and for prod promotion |
+| Prod rollback dispatch fails: "Artifact for v… has expired" | The stg-tested artifact for that release is beyond its 90-day window. Re-dispatch the release pipeline from the release branch (`gh workflow run on-release.yml --ref release/X.Y.Z -f version=X.Y.Z-rc.1`) to rebuild the artifact, then retry the rollback dispatch |
 
 ## Repository settings the pipeline depends on
 
