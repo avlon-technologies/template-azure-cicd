@@ -22,6 +22,10 @@ builder.Services
     {
         options.DefaultApiVersion = new ApiVersion(1);
         options.ReportApiVersions = true;
+        options.ApiVersionReader = ApiVersionReader.Combine(
+            new UrlSegmentApiVersionReader(),
+            new HeaderApiVersionReader("api-version")
+        );
     })
     .AddApiExplorer(options =>
     {
