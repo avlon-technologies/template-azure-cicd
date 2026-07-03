@@ -19,18 +19,29 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.value }}
     steps:
-      - name: Resolve version
+      - name: Resolve and validate version
         id: version
+        # Inputs pass via env, never interpolated into the script.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "value=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            REF="${{ github.ref_name }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            # Dispatched: the label must belong to the release branch it runs
+            # from, so staging can't be stamped/tagged with a foreign version.
             if [[ "$REF" == release/* ]]; then
-              echo "value=${REF#release/}-build.${{ github.run_number }}" >> $GITHUB_OUTPUT
-            else
-              echo "value=ms-${REF#milestone/}.${{ github.run_number }}" >> $GITHUB_OUTPUT
+              BRANCH_VERSION="${REF#release/}"
+              if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
+                echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
+                exit 1
+              fi
             fi
+            echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" == release/* ]]; then
+            echo "value=${REF#release/}-build.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=ms-${REF#milestone/}.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
           fi
 
   build:
