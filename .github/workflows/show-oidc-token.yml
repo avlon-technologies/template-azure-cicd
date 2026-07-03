@@ -24,11 +24,19 @@ jobs:
 
           b64d() { local s="${1//-/+}"; s="${s//_//}"; while [ $((${#s} % 4)) -ne 0 ]; do s="$s="; done; echo "$s" | base64 -d; }
 
-          echo "=== RAW JWT (paste into jwt.io) ==="
-          echo "$JWT"
-          echo ""
+          # GitHub auto-masks OIDC tokens in logs, so the raw token is
+          # uploaded as an artifact instead (see next step).
+          echo "$JWT" > "$RUNNER_TEMP/oidc-jwt.txt"
+
           echo "=== HEADER (how it's signed) ==="
           b64d "$(echo "$JWT" | cut -d. -f1)" | jq .
           echo ""
           echo "=== CLAIMS (what GitHub asserts about this job) ==="
           b64d "$(echo "$JWT" | cut -d. -f2)" | jq .
+
+      - name: Upload raw JWT as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oidc-jwt
+          path: ${{ runner.temp }}/oidc-jwt.txt
+          retention-days: 1
