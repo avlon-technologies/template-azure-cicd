@@ -85,7 +85,10 @@ jobs:
   release:
     name: Create GitHub Release
     # Only when the deploy succeeded and this push was a release merge.
-    if: needs.prepare.outputs.version != ''
+    # !failure() && !cancelled() instead of implicit success(): success()
+    # is false when ANY ancestor job was skipped, and on the promotion path
+    # the build job is skipped by design.
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.version != '' }}
     needs: [prepare, deploy]
     runs-on: ubuntu-latest
     permissions:
