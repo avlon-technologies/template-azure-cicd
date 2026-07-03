@@ -55,6 +55,8 @@ gh workflow run on-release.yml --ref release/1.1.0 -f version=1.1.0-rc.1
 
 The run deploys to stg and tags the commit `build/stg/1.1.0-rc.1` — the audit trail of exactly what QA tested.
 
+The version label must match the release branch: dispatching from `release/1.1.0` accepts `1.1.0` or `1.1.0-<pre-release>` (e.g. `1.1.0-rc.1`) and **fails fast** on anything else (e.g. `1.2.0-rc.1`), so staging can't be stamped or tagged with a version that doesn't belong to the branch.
+
 ## Deploy to production
 
 When a candidate is accepted, merge the release branch to `main` via PR:
@@ -151,6 +153,7 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Deploy failed at "Smoke test deployment" (dev/stg) | The build deployed but isn't answering — check App Service logs; the previous build is gone, so fix forward or re-run the last good workflow run |
 | A job after a *skipped* job never runs | GitHub implicitly wraps `if` conditions in `success()`, which is false when **any ancestor job was skipped** — and the promotion path skips `build` by design. Downstream jobs must use `!failure() && !cancelled()` explicitly (deploy and release already do; copy that pattern for new jobs) |
 | Back-merge PR wasn't created after a release | Check the release job's "Open back-merge PR" step log. If it says "not permitted to create pull requests", re-enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** |
+| rc dispatch fails at "Resolve and validate version" | The version label doesn't match the release branch (e.g. `1.2.0-rc.1` dispatched from `release/1.3.0`). Use `<branch-version>` or `<branch-version>-<pre-release>` |
 
 ## Repository settings the pipeline depends on
 
