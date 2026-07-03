@@ -59,6 +59,7 @@ var apiVersions = app.NewApiVersionSet()
 var api = app.MapGroup("/v{version:apiVersion}")
     .WithApiVersionSet(apiVersions);
 
+// hello world endpoint
 api.MapGet("/hello", () => "Hello World!")
     .WithName("HelloWorld")
     .WithSummary("Returns the hello-world greeting.")
