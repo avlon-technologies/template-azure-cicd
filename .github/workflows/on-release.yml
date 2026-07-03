@@ -68,6 +68,10 @@ jobs:
   build:
     if: needs.prepare.outputs.promote-run-id == ''
     needs: prepare
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}

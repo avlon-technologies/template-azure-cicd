@@ -5,15 +5,50 @@ on:
     branches:
       - develop
   workflow_dispatch:
+    inputs:
+      build-label:
+        description: 'Build label to redeploy (e.g. 20260703.32). Leave empty to build and deploy HEAD.'
+        required: false
+        type: string
 
 jobs:
+  prepare:
+    name: Validate build label
+    runs-on: ubuntu-latest
+    outputs:
+      build-label: ${{ steps.validate.outputs.build-label }}
+    steps:
+      - name: Validate and resolve build label
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_LABEL: ${{ inputs.build-label }}
+        run: |
+          if [ -z "$INPUT_LABEL" ]; then
+            # Push or unspecified dispatch — label resolved by _build.yml at build time.
+            echo "build-label=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TAG="build/dev/$INPUT_LABEL"
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "::error::Tag '$TAG' not found on this repository. Check the build label and try again."
+            exit 1
+          fi
+          echo "Tag $TAG exists — will rebuild HEAD stamped with label '$INPUT_LABEL'."
+          echo "build-label=$INPUT_LABEL" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_build.yml
+    with:
+      version: ${{ needs.prepare.outputs.build-label }}
 
   deploy:
-    needs: build
-    # Callers must grant what the reusable workflow's job requests — the repo
-    # default token is read-only and called workflows cannot elevate it.
+    needs: [prepare, build]
     permissions:
       id-token: write
       contents: write

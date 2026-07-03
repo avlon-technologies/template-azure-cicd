@@ -40,6 +40,8 @@ jobs:
       build-label: ${{ steps.set-label.outputs.value }}
     permissions:
       contents: read
+      checks: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +81,34 @@ jobs:
           /p:InformationalVersion=${{ steps.set-label.outputs.value }}
 
       - name: Test
-        run: dotnet test Api.Test/Api.Test.csproj --configuration Release --no-build --logger trx
+        id: test
+        run: >
+          dotnet test Api.Test/Api.Test.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ./TestResults
+        continue-on-error: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: ./TestResults/
+          retention-days: 30
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: TestResults/*.trx
+
+      - name: Fail if tests failed
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "::error::Tests failed — see the Test Results check above for details."
+          exit 1
 
       - name: Publish
         run: >
