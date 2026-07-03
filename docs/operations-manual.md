@@ -57,7 +57,7 @@ The run deploys to stg and tags the commit `build/stg/1.1.0-rc.1` — the audit 
 
 The version label must match the release branch: dispatching from `release/1.1.0` accepts `1.1.0` or `1.1.0-<pre-release>` (e.g. `1.1.0-rc.1`) and **fails fast** on anything else (e.g. `1.2.0-rc.1`), so staging can't be stamped or tagged with a version that doesn't belong to the branch.
 
-Re-dispatching the same label on the same branch (e.g. to pick up a config change or retry a flaky deploy) skips the build entirely and redeploys the existing artifact — the binary that reaches stg is byte-identical to the one from the first dispatch.
+Re-dispatching the same label on the same branch (e.g. to pick up a config change or retry a flaky deploy) skips the build and redeploys the existing artifact — the binary that reaches stg is byte-identical to the one from the first dispatch. Note that the **first** dispatch always builds: the push-triggered artifact (`webapp-publish`) has a date-based auto-label and is not reusable. Only once a dispatch has produced a commit-keyed `webapp-<sha>` artifact will subsequent dispatches with the same label skip the build.
 
 ## Deploy to production
 
