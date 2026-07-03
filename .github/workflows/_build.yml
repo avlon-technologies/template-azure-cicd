@@ -40,6 +40,7 @@ jobs:
       build-label: ${{ steps.set-label.outputs.value }}
     permissions:
       contents: read
+      checks: write
 
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +81,14 @@ jobs:
 
       - name: Test
         run: dotnet test Api.Test/Api.Test.csproj --configuration Release --no-build --logger trx
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: .NET Tests
+          path: '**/*.trx'
+          reporter: dotnet-trx
 
       - name: Publish
         run: >
