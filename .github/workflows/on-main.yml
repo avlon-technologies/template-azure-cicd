@@ -15,16 +15,16 @@ jobs:
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
     steps:
-      - name: Extract release version from merge commit
+      - name: Extract version from merge commit
         id: version
-        # When a release/X.Y.Z branch merges to main (merge commit, not
-        # squash), stamp the build with that version. Otherwise empty →
-        # _build.yml falls back to the YYYYMMDD.run_number label.
+        # When a release/X.Y.Z, hotfix/X.Y.Z, or support/X.Y.Z branch merges
+        # to main (merge commit, not squash), stamp the build with that version.
+        # Otherwise empty → _build.yml falls back to the YYYYMMDD.run_number label.
         # Message is passed via env, never interpolated into the script.
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          VERSION=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE 'release/[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d/ -f2 || true)
+          VERSION=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d/ -f2 || true)
           echo "value=$VERSION" >> $GITHUB_OUTPUT
           echo "Resolved version: '${VERSION:-<none, using date label>}'"
 
@@ -112,13 +112,18 @@ jobs:
 
       - name: Open back-merge PR to develop
         # Bookkeeping only — merging stays a human decision (conflicts with
-        # ongoing develop work are possible). Skips gracefully if the release
+        # ongoing develop work are possible). Skips gracefully if the source
         # branch is already gone or develop already contains it.
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          BRANCH="release/$VERSION"
+          BRANCH=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          if [ -z "$BRANCH" ]; then
+            echo "Could not detect source branch from commit message — skipping back-merge PR."
+            exit 0
+          fi
           if ! gh api "repos/$GITHUB_REPOSITORY/branches/$BRANCH" > /dev/null 2>&1; then
             echo "Branch $BRANCH no longer exists — skipping back-merge PR."
           elif [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
@@ -131,8 +136,8 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --base develop \
               --head "$BRANCH" \
-              --title "Back-merge release $VERSION into develop" \
-              --body "Automated follow-up to the v$VERSION production release: brings stabilization fixes from \`$BRANCH\` back into \`develop\`. Merge with a merge commit." \
+              --title "Back-merge $BRANCH into develop" \
+              --body "Automated follow-up to the v$VERSION production deploy: brings fixes from \`$BRANCH\` back into \`develop\`. Merge with a merge commit." \
               2>&1) && echo "$OUTPUT" || {
                 if echo "$OUTPUT" | grep -q "No commits between"; then
                   echo "No back-merge needed (develop already contains $BRANCH)."

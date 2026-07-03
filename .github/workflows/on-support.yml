@@ -1,9 +1,9 @@
-name: CI/CD — Hotfix → STG
+name: CI/CD — Support → STG
 
 on:
   push:
     branches:
-      - hotfix/**
+      - support/**
   workflow_dispatch:
     inputs:
       version:
@@ -27,9 +27,9 @@ jobs:
           REF: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
-          BRANCH_VERSION="${REF#hotfix/}"
+          BRANCH_VERSION="${REF#support/}"
           if [ -n "$INPUT_VERSION" ]; then
-            # Dispatched: the label must belong to the hotfix branch it runs
+            # Dispatched: the label must belong to the support branch it runs
             # from, so staging can't be stamped/tagged with a foreign version.
             if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
               echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
@@ -37,7 +37,7 @@ jobs:
             fi
             echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
           else
-            echo "value=$BRANCH_VERSION-hotfix.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "value=$BRANCH_VERSION-patch.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Locate existing artifact
