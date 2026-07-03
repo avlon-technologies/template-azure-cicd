@@ -19,6 +19,11 @@ on:
         description: Build label (YYYYMMDD.run_number) used to tag the deployment commit
         type: string
         required: true
+      slot-swap:
+        description: Deploy to the staging slot, smoke test, then swap (requires a Standard+ plan with a "staging" slot)
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   deploy:
@@ -44,19 +49,69 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to App Service
-        id: deploy
+        if: ${{ !inputs.slot-swap }}
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ inputs.webapp-name }}
           package: ./publish
 
+      - name: Deploy to staging slot
+        if: ${{ inputs.slot-swap }}
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ inputs.webapp-name }}
+          slot-name: staging
+          package: ./publish
+
+      - name: Smoke test staging slot
+        if: ${{ inputs.slot-swap }}
+        env:
+          URL: https://${{ inputs.webapp-name }}-staging.azurewebsites.net
+        run: |
+          for i in $(seq 1 12); do
+            BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
+            if [ "$BODY" = "Hello World!" ]; then
+              echo "Slot healthy: $URL"
+              exit 0
+            fi
+            echo "Attempt $i: slot not ready yet"
+            sleep 10
+          done
+          echo "::error::Staging slot failed smoke test — aborting before swap. Production is untouched."
+          exit 1
+
+      - name: Swap staging slot into production
+        if: ${{ inputs.slot-swap }}
+        run: >
+          az webapp deployment slot swap
+          --resource-group ${{ inputs.environment }}-demo-helloworld-rg
+          --name ${{ inputs.webapp-name }}
+          --slot staging
+          --target-slot production
+
+      - name: Smoke test deployment
+        env:
+          URL: https://${{ inputs.webapp-name }}.azurewebsites.net
+        run: |
+          for i in $(seq 1 12); do
+            BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
+            if [ "$BODY" = "Hello World!" ]; then
+              echo "Deployment healthy: $URL"
+              exit 0
+            fi
+            echo "Attempt $i: app not ready yet"
+            sleep 10
+          done
+          echo "::error::Deployment failed smoke test at $URL"
+          exit 1
+
       - name: Output deployment URL
         env:
-          URL: ${{ steps.deploy.outputs.webapp-url }}
+          URL: https://${{ inputs.webapp-name }}.azurewebsites.net
         run: |
           echo "Deployed ${{ inputs.build-label }} to ${{ inputs.environment }}: $URL"
           {
-            echo "### 🚀 Deployed \`${{ inputs.build-label }}\` to **${{ inputs.environment }}**"
+            echo "### 🚀 Deployed \`${{ inputs.build-label }}\` to **${{ inputs.environment }}**${{ inputs.slot-swap && ' (slot swap)' || '' }}"
             echo ""
             echo "| | |"
             echo "|---|---|"
