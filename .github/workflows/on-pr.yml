@@ -12,3 +12,21 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/_build.yml
+
+  guard-main-source:
+    name: Guard main source branch
+    # main receives code only through release/* or hotfix/* branches — features
+    # flow via develop and reach prod through a release. Required check on main.
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce release or hotfix source
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD_REF" == release/* || "$HEAD_REF" == hotfix/* ]]; then
+            echo "Source branch '$HEAD_REF' is allowed into main."
+          else
+            echo "::error::PRs into main must come from a release/* or hotfix/* branch, not '$HEAD_REF'. Merge to develop and cut a release instead."
+            exit 1
+          fi
