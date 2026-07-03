@@ -39,6 +39,10 @@ jobs:
 
   build:
     needs: prepare
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.build-label }}

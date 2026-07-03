@@ -88,9 +88,6 @@ jobs:
   deploy:
     if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
     needs: [prepare, build]
-    permissions:
-      id-token: write
-      contents: write
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
