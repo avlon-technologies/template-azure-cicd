@@ -46,6 +46,40 @@ The flow, in plain English:
 
 Each environment has its **own** identity, and each identity can only touch its own resource group — a dev deploy physically cannot modify prod.
 
+## The trust rule, up close
+
+The trust rule is **not automatic** — it's a deliberate piece of configuration called a **federated credential**, stored in Azure on the app registration itself. Each of the three app registrations carries exactly one. This is the real one on the prod identity:
+
+```json
+{
+  "name": "github-cicd-demo-prod",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:pixelbits-mk/cicd-demo:environment:prod",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+```
+
+The three fields *are* the rule. A token is accepted only if it matches all of them:
+
+- **issuer** — who signed it: GitHub Actions' token service (this is also where Azure fetches the public keys used to verify the signature).
+- **subject** — who it's about: this exact repo, deploying through this exact GitHub environment. Matched as a literal string; a fork, another repo, or a job outside the `prod` environment produces a different subject and is refused.
+- **audiences** — who it's for: Azure's token exchange, so a token minted for some other service can't be replayed here.
+
+Where to find it:
+
+- **Azure Portal:** Entra ID → App registrations → `demo-helloworld-github-deploy-<env>` → **Certificates & secrets** → **Federated credentials** tab. (It sits exactly where a client secret would go, because it replaces one.)
+- **CLI:** `az ad app federated-credential list --id <client-id>`. It was created with `az ad app federated-credential create`.
+
+The division of labor between the two systems:
+
+| Automatic (GitHub's side) | Configured by us (Azure's side) |
+|---|---|
+| Minting the signed token for every job that asks | The app registration (identity) |
+| The claims inside it (repo, environment, commit…) | The federated credential (trust rule) |
+| Publishing the public keys used for verification | The RBAC role assignment (permissions) |
+
+GitHub vouches for *every* workflow automatically — but Azure trusts *none* of them until someone writes a rule honoring one specific voucher. That narrow, explicit opt-in is where the security lives.
+
 ## Why there's nothing secret in the YAML
 
 The workflow files contain a client ID, tenant ID, and subscription ID in plain text. None of these are credentials — they're addresses, like knowing a company's street address. Knowing them doesn't get you past security, because Azure only accepts the *signed GitHub token*, and:
