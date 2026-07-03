@@ -58,7 +58,13 @@ jobs:
         run: dotnet restore ${{ inputs.solution }}
 
       - name: Build
-        run: dotnet build ${{ inputs.solution }} --configuration Release --no-restore
+        # InformationalVersion must be set at build time — the assembly
+        # attribute is compiled in here; publish below runs with --no-build.
+        run: >
+          dotnet build ${{ inputs.solution }}
+          --configuration Release
+          --no-restore
+          /p:InformationalVersion=${{ steps.set-label.outputs.value }}
 
       - name: Test
         run: dotnet test Api.Test/Api.Test.csproj --configuration Release --no-build --logger trx
@@ -69,7 +75,6 @@ jobs:
           --configuration Release
           --no-build
           --output ./publish
-          /p:InformationalVersion=${{ steps.set-label.outputs.value }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

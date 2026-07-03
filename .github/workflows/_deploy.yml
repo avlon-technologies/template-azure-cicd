@@ -44,10 +44,26 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to App Service
+        id: deploy
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ inputs.webapp-name }}
           package: ./publish
+
+      - name: Output deployment URL
+        env:
+          URL: ${{ steps.deploy.outputs.webapp-url }}
+        run: |
+          echo "Deployed ${{ inputs.build-label }} to ${{ inputs.environment }}: $URL"
+          {
+            echo "### 🚀 Deployed \`${{ inputs.build-label }}\` to **${{ inputs.environment }}**"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| App | $URL |"
+            echo "| Swagger | $URL/swagger |"
+            echo "| API | $URL/v1/hello |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tag deployment
         uses: actions/github-script@v7
