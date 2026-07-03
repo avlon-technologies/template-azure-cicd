@@ -21,7 +21,7 @@ Run locally: `dotnet run --project Api`
 
 Two reusable workflows (prefixed `_`) are composed by branch-triggered entry workflows:
 
-- `_build.yml` — build, test, publish, upload `webapp-publish` artifact. Accepts an optional `version` input; otherwise the build label defaults to `YYYYMMDD.<run_number>`. The label is stamped into `InformationalVersion` at the *build* step (publish runs `--no-build`) and surfaces in Swagger. Outputs `build-label`.
+- `_build.yml` — build, test, publish, upload `webapp-publish` artifact. Accepts an optional `version` input; otherwise the build label defaults to `YYYYMMDD.<run_number>`. The label is stamped into `InformationalVersion` at the *build* step (publish runs `--no-build`) and surfaces in Swagger. Outputs `build-label`. Requires `checks: write` and `pull-requests: write` on the caller to publish test results as a PR check via `EnricoMi/publish-unit-test-result-action`.
 - `_deploy.yml` — downloads the artifact, logs into Azure via OIDC (`azure-client-id` input), deploys to App Service (with `slot-swap: true`, used by prod: deploy to `staging` slot → smoke test → swap), smoke-tests `/v1/hello`, prints the URL to the run summary, and tags the commit `build/<environment>/<build-label>`. Requires a GitHub environment (`dev` | `stg` | `prod`).
 - `on-pr.yml` — builds/tests PRs to `develop`/`main`; the check is required by rulesets, which also enforce PR-only merges (merge-commit-only on `main`).
 
@@ -38,6 +38,10 @@ Branch → environment mapping:
 | `on-main.yml` | `main` | prod / `prod-demo-helloworld-api` |
 
 Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`. Dispatched rc builds upload commit-keyed artifacts (`webapp-<sha>`, 90-day retention); when the release merges to main, `on-main.yml` **promotes** that exact artifact (build job skipped) — rebuild is only the fallback. Re-dispatching the same label on the same branch also skips the build by looking up the existing `webapp-<sha>` artifact — the first dispatch always builds (the push artifact is named `webapp-publish` and has the wrong version stamp), subsequent dispatches with the same label reuse it.
+
+`on-main.yml` accepts an optional `version` dispatch input for rollback/redeploy: supply a previously released version (e.g. `1.5.0`) to promote that release's stg-tested artifact to prod via the same blue/green path. Requires the artifact to be within its 90-day retention window. The `release` and back-merge jobs are skipped on dispatch (push-only). Dispatching without a version redeploys the current HEAD of `main`.
+
+`on-develop.yml` accepts an optional `build-label` dispatch input: supply an existing `build/dev/<label>` label to rebuild HEAD stamped with that label and redeploy to dev (useful for retrying a failed deploy with the same label). The tag is validated before building; dispatching without a label behaves identically to a push.
 
 Hotfix/support specifics (`on-hotfix.yml`, `on-support.yml`): same dispatch-gated pattern as releases — pushes only build and test (no auto-deploy to stg), deploys are manually triggered. Version validation enforces label-to-branch matching; push auto-labels are `X.Y.Z-hotfix.<run_number>` and `X.Y.Z-patch.<run_number>` respectively. Merging either to `main` auto-detects the version from the merge commit subject (regex covers `release|hotfix|support`) and triggers the same prod promotion, GitHub Release creation, and back-merge PR as a release merge. Cut `hotfix/X.Y.Z` and `support/X.Y.Z` branches from `main` (or a version tag), not `develop`.
 
