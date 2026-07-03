@@ -34,9 +34,12 @@ Branch → environment mapping:
 | `on-develop.yml` | `develop` | dev / `dev-demo-helloworld-api` |
 | `on-release.yml` | `release/**`, `milestone/**` | stg / `stg-demo-helloworld-api` |
 | `on-hotfix.yml` | `hotfix/**` | stg / `stg-demo-helloworld-api` |
+| `on-support.yml` | `support/**` | stg / `stg-demo-helloworld-api` |
 | `on-main.yml` | `main` | prod / `prod-demo-helloworld-api` |
 
-Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`. Dispatched rc builds upload commit-keyed artifacts (`webapp-<sha>`, 90-day retention); when the release merges to main, `on-main.yml` **promotes** that exact artifact (build job skipped) — rebuild is only the fallback.
+Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`. Dispatched rc builds upload commit-keyed artifacts (`webapp-<sha>`, 90-day retention); when the release merges to main, `on-main.yml` **promotes** that exact artifact (build job skipped) — rebuild is only the fallback. Re-dispatching the same label on the same branch also skips the build by looking up the existing `webapp-<sha>` artifact — the first dispatch always builds (the push artifact is named `webapp-publish` and has the wrong version stamp), subsequent dispatches with the same label reuse it.
+
+Hotfix/support specifics (`on-hotfix.yml`, `on-support.yml`): same dispatch-gated pattern as releases — pushes only build and test (no auto-deploy to stg), deploys are manually triggered. Version validation enforces label-to-branch matching; push auto-labels are `X.Y.Z-hotfix.<run_number>` and `X.Y.Z-patch.<run_number>` respectively. Merging either to `main` auto-detects the version from the merge commit subject (regex covers `release|hotfix|support`) and triggers the same prod promotion, GitHub Release creation, and back-merge PR as a release merge. Cut `hotfix/X.Y.Z` and `support/X.Y.Z` branches from `main` (or a version tag), not `develop`.
 
 `call-validate-pr.yml` delegates PR title/milestone/issue-link validation to the shared `DBDHub/sna_common_workflows` repo; it needs the `APP_ID` variable and `APP_PEM` secret.
 

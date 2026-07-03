@@ -57,6 +57,8 @@ The run deploys to stg and tags the commit `build/stg/1.1.0-rc.1` — the audit 
 
 The version label must match the release branch: dispatching from `release/1.1.0` accepts `1.1.0` or `1.1.0-<pre-release>` (e.g. `1.1.0-rc.1`) and **fails fast** on anything else (e.g. `1.2.0-rc.1`), so staging can't be stamped or tagged with a version that doesn't belong to the branch.
 
+Re-dispatching the same label on the same branch (e.g. to pick up a config change or retry a flaky deploy) skips the build and redeploys the existing artifact — the binary that reaches stg is byte-identical to the one from the first dispatch. Note that the **first** dispatch always builds: the push-triggered artifact (`webapp-publish`) has a date-based auto-label and is not reusable. Only once a dispatch has produced a commit-keyed `webapp-<sha>` artifact will subsequent dispatches with the same label skip the build.
+
 ## Deploy to production
 
 When a candidate is accepted, merge the release branch to `main` via PR:
@@ -91,7 +93,7 @@ git push origin --delete release/1.1.0
 
 ## Hotfix production
 
-For urgent fixes that can't wait for a release cycle:
+For urgent fixes that can't wait for a release cycle. Always cut from `main` (or the relevant version tag), not `develop`:
 
 ```
 git checkout main && git pull
@@ -100,13 +102,38 @@ git checkout -b hotfix/1.1.1
 git push -u origin hotfix/1.1.1
 ```
 
-Every push to `hotfix/**` auto-deploys to **stg** for verification. When verified, PR `hotfix/1.1.1 → main` (merge commit) — note the auto-versioning only recognizes `release/X.Y.Z` merges, so a hotfix prod deploy gets a date label; tag `v1.1.1` manually if desired:
+Pushes build and test only — no automatic stg deploy. When ready to verify on stg, dispatch manually:
+
+**From the UI:** Actions → **CI/CD — Hotfix → STG** → Run workflow → select the hotfix branch → enter the version label (e.g. `1.1.1` or `1.1.1-rc.1`)
+
+**From the command line:**
+```
+gh workflow run on-hotfix.yml --ref hotfix/1.1.1 -f version=1.1.1-rc.1
+```
+
+When verified, PR `hotfix/1.1.1 → main` (merge commit). Merging triggers **CI/CD — Main → PROD**, which auto-detects `1.1.1` from the merge commit subject, promotes the stg-tested artifact, creates GitHub Release `v1.1.1`, and opens a back-merge PR to `develop`.
+
+The version label must match the hotfix branch: `1.1.1` or `1.1.1-<pre-release>`. Re-dispatching the same label skips the rebuild and redeploys the existing artifact (same rules as the release flow).
+
+## Maintain a support branch
+
+Use a `support/X.Y.Z` branch to backport fixes to a prior production version while a newer release is in progress on `develop`. Cut from `main` at the relevant version tag:
 
 ```
-gh release create v1.1.1 --target main --generate-notes
+git checkout -b support/1.4.1 v1.4.0
+git push -u origin support/1.4.1
 ```
 
-Back-merge the hotfix to `develop` afterward, same as a release.
+The workflow (`on-support.yml`) behaves identically to the hotfix flow: pushes build and test only, deploys to stg on manual dispatch, and merging to `main` triggers full prod promotion, a GitHub Release `v1.4.1`, and a back-merge PR to `develop`.
+
+**From the command line:**
+```
+gh workflow run on-support.yml --ref support/1.4.1 -f version=1.4.1-rc.1
+gh pr create --base main --head support/1.4.1 --title "Support 1.4.1"
+gh pr merge --merge
+```
+
+> **Note:** the `support/*` source branch must be enabled in the GitHub ruleset for `main` (Settings → Rules → the `main` ruleset → bypass/source branch list). See the repository settings section below.
 
 ## Roll back production
 
@@ -133,9 +160,10 @@ This is near-instant (no rebuild, no redeploy). For dev/stg (no slots), re-run a
 | Thing | Convention | Example |
 |---|---|---|
 | Release branch | bare version | `release/1.1.0` |
-| Candidate label (dispatch input / stg tag) | SemVer pre-release | `1.1.0-rc.2` |
-| Release tag (automatic on prod deploy) | `v` + version | `v1.1.0` |
 | Hotfix branch | bare patch version | `hotfix/1.1.1` |
+| Support branch | bare patch version | `support/1.1.1` |
+| Candidate label (dispatch input / stg tag) | SemVer pre-release | `1.1.0-rc.2` |
+| Release / hotfix / support tag (automatic on prod deploy) | `v` + version | `v1.1.0` |
 
 The rc number identifies a *candidate build*; the branch identifies the *line of development* — so rc numbers never appear in branch names.
 
@@ -154,6 +182,7 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | A job after a *skipped* job never runs | GitHub implicitly wraps `if` conditions in `success()`, which is false when **any ancestor job was skipped** — and the promotion path skips `build` by design. Downstream jobs must use `!failure() && !cancelled()` explicitly (deploy and release already do; copy that pattern for new jobs) |
 | Back-merge PR wasn't created after a release | Check the release job's "Open back-merge PR" step log. If it says "not permitted to create pull requests", re-enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** |
 | rc dispatch fails at "Resolve and validate version" | The version label doesn't match the release branch (e.g. `1.2.0-rc.1` dispatched from `release/1.3.0`). Use `<branch-version>` or `<branch-version>-<pre-release>` |
+| Re-dispatch with same label rebuilds instead of reusing artifact | The prior `webapp-<sha>` artifact has expired (90-day retention). A fresh build is the correct fallback — the new artifact will be used for any subsequent redeploys and for prod promotion |
 
 ## Repository settings the pipeline depends on
 
@@ -161,7 +190,7 @@ These live in GitHub settings, not in the workflow files — if the repo is ever
 
 | Setting | Where | Value |
 |---|---|---|
-| Rulesets `develop` / `main` / `release` | Settings → Rules | PR required; **build / Build & Test** status check required; `main` allows merge commits only |
+| Rulesets `develop` / `main` / `release` | Settings → Rules | PR required; **build / Build & Test** status check required; `main` allows merge commits only; `main` source branches must include `support/*` |
 | Workflow permissions | Settings → Actions → General | Default token: **read-only**; **Allow GitHub Actions to create and approve pull requests: on** (the back-merge PR needs it) |
 | Repo variables | Settings → Secrets and variables → Actions | `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (used by `_deploy.yml`; not secrets) |
 | Environments | Settings → Environments | `dev`, `stg`, `prod` — each matched by a federated credential on its deploy identity |
