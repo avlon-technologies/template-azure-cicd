@@ -47,5 +47,5 @@ jobs:
     with:
       environment: stg
       webapp-name: stg-demo-helloworld-api
-      azure-client-id: '' # TODO: stg App Registration client ID
+      azure-client-id: 3d291ad9-9d36-4f52-be2c-6b385a085ffb
       build-label: ${{ needs.build.outputs.build-label }}

@@ -28,10 +28,10 @@ Branch → environment mapping:
 
 | Entry workflow | Trigger branches | Environment / App Service |
 |---|---|---|
-| `on-develop.yml` | `develop` | dev / `dev-ue2-api-fc-base-app` |
-| `on-release.yml` | `release/**`, `milestone/**` | stg / `stg-ue2-api-fc-base-app` |
-| `on-hotfix.yml` | `hotfix/**` | stg / `stg-ue2-api-fc-base-app` |
-| `on-main.yml` | `main` | prod / `prod-ue2-api-fc-base-app` |
+| `on-develop.yml` | `develop` | dev / `dev-demo-helloworld-api` |
+| `on-release.yml` | `release/**`, `milestone/**` | stg / `stg-demo-helloworld-api` |
+| `on-hotfix.yml` | `hotfix/**` | stg / `stg-demo-helloworld-api` |
+| `on-main.yml` | `main` | prod / `prod-demo-helloworld-api` |
 
 Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`.
 
@@ -41,6 +41,6 @@ Release specifics (`on-release.yml`): pushes only build (deploy is gated on `wor
 
 Lives in a separate repo: `../cicd-infrastructure` (see its README). Terraform provisions, per environment (`dev` | `qa` | `stg` | `prod`), a resource group `<env>-demo-helloworld-rg` with its own VNet, an App Service `<env>-demo-helloworld-api` (B1 plan; P0v3 with slots for prod) (the names the deploy workflows target), and a Key Vault — plus one shared Application Gateway exposing all environments (one frontend port per env: prod :80, dev :8081, qa :8082, stg :8083).
 
-## Known gaps
+## Deploy identity
 
-All three `azure-client-id` inputs in the `on-*` entry workflows are empty `# TODO` placeholders — deploys will fail at Azure login until the App Registration client IDs are filled in.
+CI deploys log into Azure via OIDC as the `demo-helloworld-github-deploy` App Registration (client id `3d291ad9-9d36-4f52-be2c-6b385a085ffb`, Website Contributor on the subscription) with federated credentials for the `dev`, `stg`, and `prod` GitHub environments. Deploys fail until the Terraform in `../cicd-infrastructure` has been applied for the target environment (the App Service must exist).

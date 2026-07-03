@@ -40,8 +40,8 @@ jobs:
         uses: azure/login@v2
         with:
           client-id: ${{ inputs.azure-client-id }}
-          tenant-id: fb0af7d1-8a83-48bc-8d2d-cd92034c79d4
-          subscription-id: c0985859-a9bb-481e-b71d-63c3a72ed7cb
+          tenant-id: df6b18d9-22de-4a09-841c-49b4f8fe9cfe
+          subscription-id: ab98b12f-042b-45fa-8c23-0286079a0117
 
       - name: Deploy to App Service
         uses: azure/webapps-deploy@v3
