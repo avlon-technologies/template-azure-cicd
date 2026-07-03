@@ -21,4 +21,15 @@ public class HelloWorldEndpointTests : IClassFixture<WebApplicationFactory<Progr
         response.EnsureSuccessStatusCode();
         Assert.Equal("Hello World!", await response.Content.ReadAsStringAsync());
     }
+
+    [Fact]
+    public async Task V1Hello_ReturnsHelloWorld()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/v1/hello");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("Hello World!", await response.Content.ReadAsStringAsync());
+    }
 }
