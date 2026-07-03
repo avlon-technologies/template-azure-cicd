@@ -82,12 +82,16 @@ jobs:
 
       - name: Test
         id: test
+        # Run against the full solution so coverage is aggregated across all
+        # test projects automatically as new ones are added.
         run: >
-          dotnet test Api.Test/Api.Test.csproj
+          dotnet test ${{ inputs.solution }}
           --configuration Release
           --no-build
           --logger "trx;LogFileName=test-results.trx"
           --results-directory ./TestResults
+          --collect:"XPlat Code Coverage"
+          --settings coverlet.runsettings
         continue-on-error: true
 
       - name: Upload test results
@@ -102,7 +106,44 @@ jobs:
         uses: EnricoMi/publish-unit-test-result-action@v2
         if: always()
         with:
-          files: TestResults/*.trx
+          # Recursive glob: handles both single-project (flat) and
+          # multi-project (one subdirectory per assembly) layouts.
+          files: TestResults/**/*.trx
+
+      - name: Install ReportGenerator
+        if: always()
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+      - name: Generate coverage report
+        if: always()
+        continue-on-error: true
+        run: |
+          reportgenerator \
+            "-reports:./TestResults/**/coverage.cobertura.xml" \
+            "-targetdir:./coverage-report" \
+            "-reporttypes:Html;MarkdownSummaryGithub" \
+            "-assemblyfilters:-*.Test;-*.Tests" \
+            "-title:cicd-demo Coverage Report"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: coverage-report
+          path: ./coverage-report/
+          retention-days: 30
+
+      - name: Write coverage summary
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -f ./coverage-report/SummaryGithub.md ]; then
+            echo "## Code Coverage" >> $GITHUB_STEP_SUMMARY
+            cat ./coverage-report/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> **Full report:** download the \`coverage-report\` artifact from this run and open \`index.html\`." >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Fail if tests failed
         if: steps.test.outcome == 'failure'

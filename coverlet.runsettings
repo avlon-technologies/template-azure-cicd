@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <!-- Exclude test assemblies themselves from being measured -->
+          <Exclude>[*.Test]*,[*.Tests]*</Exclude>
+          <!-- Exclude code decorated with standard exclusion attributes,
+               and compiler-generated types (async state machines, lambda
+               caches) which skew branch coverage numbers -->
+          <ExcludeByAttribute>ExcludeFromCodeCoverage,GeneratedCodeAttribute,CompilerGeneratedAttribute</ExcludeByAttribute>
+          <!-- Exclude source-generated and obj/ files -->
+          <ExcludeByFile>**/obj/**/*.cs,**/*.g.cs</ExcludeByFile>
+          <UseSourceLink>true</UseSourceLink>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
