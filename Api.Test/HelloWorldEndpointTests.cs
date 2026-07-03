@@ -41,7 +41,11 @@ public class HelloWorldEndpointTests : IClassFixture<WebApplicationFactory<Progr
         var response = await client.GetAsync("/openapi/v1.json");
 
         response.EnsureSuccessStatusCode();
-        Assert.Contains("/v1/hello", await response.Content.ReadAsStringAsync());
+        var spec = await response.Content.ReadAsStringAsync();
+        // Version token substituted to a literal path, doc stamped with build info.
+        Assert.Contains("/v1/hello", spec);
+        Assert.Contains("cicd-demo API", spec);
+        Assert.Contains("Deployed build:", spec);
     }
 
     [Fact]
