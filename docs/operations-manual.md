@@ -67,10 +67,12 @@ gh pr merge --merge        # merge commit — do NOT squash (see note)
 Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 1. Extracts `1.1.0` from the merge commit subject
-2. Builds with that version (stamped into the assembly's `InformationalVersion`)
-3. Deploys **blue/green**: the build goes to the `staging` slot first, is smoke-tested there, and only then swapped into production — a bad build never reaches users, and the previous build stays in the slot for instant rollback (swap back)
+2. **Promotes the stg-tested artifact** (build-once-promote-many): rc dispatches store their build keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. If no rc was ever dispatched (or the artifact expired), it falls back to rebuilding from source with the release version
+3. Deploys **blue/green**: the artifact goes to the `staging` slot first, is smoke-tested there, and only then swapped into production — a bad build never reaches users, and the previous build stays in the slot for instant rollback (swap back)
 4. Smoke-tests production after the swap and tags the commit `build/prod/1.1.0`
 5. Creates GitHub Release **v1.1.0** with generated notes
+
+> **Promoted artifacts keep their rc stamp.** Because the promoted binary is byte-identical to what QA tested, prod's Swagger shows the rc label it was built with (e.g. `1.1.0-rc.3`) — that's a feature: it tells you exactly which candidate was promoted. The git tag (`build/prod/1.1.0`) and GitHub Release (`v1.1.0`) carry the release version.
 
 > **Always use a merge commit for release PRs.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A squash merge hides the branch name, so the build falls back to a date label and no GitHub Release is created. Squash also breaks the back-merge below.
 

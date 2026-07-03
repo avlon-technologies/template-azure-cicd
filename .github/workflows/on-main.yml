@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
+      promote-artifact: ${{ steps.promote.outputs.artifact }}
+      promote-run-id: ${{ steps.promote.outputs.run-id }}
     steps:
       - name: Extract release version from merge commit
         id: version
@@ -26,7 +28,35 @@ jobs:
           echo "value=$VERSION" >> $GITHUB_OUTPUT
           echo "Resolved version: '${VERSION:-<none, using date label>}'"
 
+      - name: Locate promotable release artifact
+        id: promote
+        # Build-once-promote-many: the merge commit's second parent is the
+        # release branch head that was rc-tested on staging. If its build
+        # artifact (webapp-<sha>, 90-day retention) still exists, prod ships
+        # that exact artifact and the build job is skipped. Fallback: rebuild.
+        if: steps.version.outputs.value != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.parents[1].sha // empty')
+          if [ -z "$RELEASE_SHA" ]; then
+            echo "Not a merge commit — will rebuild."
+            exit 0
+          fi
+          NAME="webapp-$RELEASE_SHA"
+          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          if [ -n "$RUN_ID" ]; then
+            echo "Promoting stg-tested artifact $NAME from run $RUN_ID — build will be skipped."
+            echo "artifact=$NAME" >> $GITHUB_OUTPUT
+            echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
+          else
+            echo "No unexpired artifact for $RELEASE_SHA (no rc dispatched, or expired) — will rebuild."
+          fi
+
   build:
+    # Skipped when a stg-tested artifact is being promoted.
+    if: needs.prepare.outputs.promote-run-id == ''
     needs: prepare
     uses: ./.github/workflows/_build.yml
     with:
@@ -34,6 +64,8 @@ jobs:
 
   deploy:
     needs: [prepare, build]
+    # Run even when build was skipped (promotion path).
+    if: ${{ !failure() && !cancelled() }}
     # Callers must grant what the reusable workflow's job requests — the repo
     # default token is read-only and called workflows cannot elevate it.
     permissions:
@@ -44,9 +76,11 @@ jobs:
       environment: prod
       webapp-name: prod-demo-helloworld-api
       azure-client-id: 279d0dec-5668-4d48-a333-4186cde9f859
-      build-label: ${{ needs.build.outputs.build-label }}
+      build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
       # Blue/green: deploy to the staging slot, smoke test, then swap.
       slot-swap: true
+      artifact-name: ${{ needs.prepare.outputs.promote-artifact || 'webapp-publish' }}
+      artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
 
   release:
     name: Create GitHub Release

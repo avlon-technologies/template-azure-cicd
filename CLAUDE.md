@@ -34,7 +34,7 @@ Branch → environment mapping:
 | `on-hotfix.yml` | `hotfix/**` | stg / `stg-demo-helloworld-api` |
 | `on-main.yml` | `main` | prod / `prod-demo-helloworld-api` |
 
-Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`.
+Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`. Dispatched rc builds upload commit-keyed artifacts (`webapp-<sha>`, 90-day retention); when the release merges to main, `on-main.yml` **promotes** that exact artifact (build job skipped) — rebuild is only the fallback.
 
 `call-validate-pr.yml` delegates PR title/milestone/issue-link validation to the shared `DBDHub/sna_common_workflows` repo; it needs the `APP_ID` variable and `APP_PEM` secret.
 

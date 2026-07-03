@@ -38,6 +38,10 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
+      # Dispatched rc builds are promotable: commit-keyed name, 90-day
+      # retention, so the prod deploy can ship this exact artifact.
+      artifact-name: ${{ github.event_name == 'workflow_dispatch' && format('webapp-{0}', github.sha) || 'webapp-publish' }}
+      retention-days: ${{ github.event_name == 'workflow_dispatch' && 90 || 1 }}
 
   deploy:
     # Only deploy when the release coordinator manually dispatches — not on every push.
@@ -54,3 +58,4 @@ jobs:
       webapp-name: stg-demo-helloworld-api
       azure-client-id: e205fdd4-b556-4f37-aa20-a07b68c55f2f
       build-label: ${{ needs.build.outputs.build-label }}
+      artifact-name: webapp-${{ github.sha }}
