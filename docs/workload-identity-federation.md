@@ -1,6 +1,6 @@
 # How GitHub Deploys to Azure Without a Password
 
-This repo's pipelines deploy to Azure App Service without any stored secret — no password, no key, no certificate. This document explains how that works in plain English. The pattern is called **workload identity federation** (you'll also see it called "GitHub OIDC").
+This repo's pipelines deploy to Azure App Service without any stored secret — no password, no key, no certificate. This document explains how that works. The pattern is called **workload identity federation** (you'll also see it called "GitHub OIDC").
 
 ## The problem with passwords
 
