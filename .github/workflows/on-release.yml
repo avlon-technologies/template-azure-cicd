@@ -98,6 +98,7 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
