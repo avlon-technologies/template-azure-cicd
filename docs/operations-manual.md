@@ -12,7 +12,7 @@ How to build, deploy, release, and verify this application across environments.
 
 **Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*`, `hotfix/*`, or `support/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
-Every deploy, in every environment, ends with an automatic **smoke test** (`GET /v1/hello` must return `Hello World!`) — a deploy that leaves the app broken fails the pipeline instead of reporting success.
+Every deploy, in every environment, ends with an automatic **smoke test**: `GET /v1/hello` must return `Hello World!` **and** `/openapi/v1.json` must report the build label being deployed (or a pre-release of it — promoted binaries keep their rc stamp). A deploy that leaves the app broken *or serving the wrong build* fails the pipeline instead of reporting success.
 
 ## Deploy to dev (automatic)
 
@@ -80,7 +80,7 @@ gh pr merge --merge        # merge commit — do NOT squash (see note)
 Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 1. Extracts `1.1.0` from the merge commit subject
-2. **Promotes the stg-tested artifact** (build-once-promote-many): rc dispatches store their build keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. If no rc was ever dispatched (or the artifact expired), the run **fails** rather than silently rebuilding untested source — dispatch the release pipeline to stage a candidate, then re-run
+2. **Promotes the stg-tested artifact** (build-once-promote-many): rc dispatches store their build keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. "Stg-tested" is verified, not assumed: promotion requires a `build/stg/*` tag on the release head, which only a stg deploy that passed its smoke test creates. If no rc was ever dispatched, the artifact expired, or the candidate never went green on staging, the run **fails** rather than silently rebuilding or shipping untested source — dispatch the release pipeline to stage a candidate, verify staging, then re-run
 3. Deploys **blue/green**: the artifact goes to the `staging` slot first, is smoke-tested there, and only then swapped into production — a bad build never reaches users, and the previous build stays in the slot for instant rollback (swap back)
 4. Smoke-tests production after the swap — if that fails, the previous build is **automatically swapped back** — and tags the release-branch commit the artifact was built from as `build/prod/1.1.0`
 5. Creates GitHub Release **v1.1.0** with generated notes
@@ -201,6 +201,8 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Prod deploy failed at "Smoke test staging slot" | The new build is unhealthy — **production was not touched** (swap never happened). Fix and redeploy; nothing to roll back |
 | Prod deploy failed at "Smoke test deployment" (after the swap) | The swap went through but prod stopped answering — the pipeline **automatically swapped the previous build back**; production is running the prior version. Investigate the bad build before redeploying |
 | Release merged but prod deploy fails: "No unexpired stg-tested artifact" | No rc was ever dispatched to stg for the merged release head (or the artifact expired). Dispatch the release pipeline on the source branch to build and stage-test one, then re-run the failed prod run — it will find and promote the fresh artifact |
+| Release merged but prod deploy fails: "No build/stg/* tag points at …" | The rc artifact was built, but its stg deploy never went green (smoke test failed, deploy errored, or the dispatch was cancelled). Re-dispatch the release pipeline on the source branch, let the stg deploy pass, then re-run the prod run |
+| Smoke test fails: "reports version 'X', expected 'Y'" | The app answers but is running the wrong build — the deploy or swap didn't take effect, or the wrong artifact shipped. Check which run last deployed to that environment; redeploy the intended label |
 | Deploy fails at "Tag deployment": "Deployment tags are immutable" | The `build/<env>/<label>` tag already points at different code — a label was reused for a different commit. Use a new label (only the dev same-label redeploy flow may move tags) |
 | Deploy failed at "Smoke test deployment" (dev/stg) | The build deployed but isn't answering — check App Service logs; the previous build is gone, so fix forward or re-run the last good workflow run |
 | Deploy run sits in "Queued" | Concurrency groups serialize deploys per environment (`deploy-dev`, `deploy-stg`, `deploy-prod`) — the run starts when the in-flight deploy to that environment finishes |

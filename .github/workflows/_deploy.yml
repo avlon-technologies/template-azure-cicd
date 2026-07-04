@@ -62,6 +62,10 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      # download-artifact with an explicit run-id + github-token reads via the
+      # REST API, which needs actions: read (the promotion path pulls the
+      # artifact from a different run). Callers must grant this too.
+      actions: read
 
     steps:
       - name: Download artifact
@@ -98,17 +102,29 @@ jobs:
         if: ${{ inputs.slot-swap }}
         env:
           URL: https://${{ inputs.webapp-name }}-staging.azurewebsites.net
+          EXPECTED: ${{ inputs.build-label }}
         run: |
+          # Healthy = answers correctly AND reports the intended build. The
+          # version check treats a mismatch as "not ready" (the old build may
+          # still be serving while the new one warms up) and only fails when
+          # the loop times out. Promoted binaries keep their rc stamp, so the
+          # exact label or a pre-release of it (1.6.0 ← 1.6.0-rc.3) passes.
+          DEPLOYED=""
           for i in $(seq 1 12); do
             BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
             if [ "$BODY" = "Hello World!" ]; then
-              echo "Slot healthy: $URL"
-              exit 0
+              DEPLOYED=$(curl -fsS --max-time 10 "$URL/openapi/v1.json" | jq -r '.info.version // empty' || true)
+              if [ "$DEPLOYED" = "$EXPECTED" ] || [[ "$DEPLOYED" == "$EXPECTED"-* ]]; then
+                echo "Slot healthy: $URL is serving build $DEPLOYED"
+                exit 0
+              fi
+              echo "Attempt $i: slot answering but reports version '${DEPLOYED:-<none>}', want '$EXPECTED'"
+            else
+              echo "Attempt $i: slot not ready yet"
             fi
-            echo "Attempt $i: slot not ready yet"
             sleep 10
           done
-          echo "::error::Staging slot failed smoke test — aborting before swap. Production is untouched."
+          echo "::error::Staging slot failed smoke test (last version seen: '${DEPLOYED:-<none>}', expected '$EXPECTED') — aborting before swap. Production is untouched."
           exit 1
 
       - name: Swap staging slot into production
@@ -124,17 +140,27 @@ jobs:
       - name: Smoke test deployment
         env:
           URL: https://${{ inputs.webapp-name }}.azurewebsites.net
+          EXPECTED: ${{ inputs.build-label }}
         run: |
+          # Same contract as the slot smoke test: right answer AND right
+          # build. Catches a swap that silently didn't take effect as well as
+          # a deploy that shipped the wrong artifact.
+          DEPLOYED=""
           for i in $(seq 1 12); do
             BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
             if [ "$BODY" = "Hello World!" ]; then
-              echo "Deployment healthy: $URL"
-              exit 0
+              DEPLOYED=$(curl -fsS --max-time 10 "$URL/openapi/v1.json" | jq -r '.info.version // empty' || true)
+              if [ "$DEPLOYED" = "$EXPECTED" ] || [[ "$DEPLOYED" == "$EXPECTED"-* ]]; then
+                echo "Deployment healthy: $URL is serving build $DEPLOYED"
+                exit 0
+              fi
+              echo "Attempt $i: app answering but reports version '${DEPLOYED:-<none>}', want '$EXPECTED'"
+            else
+              echo "Attempt $i: app not ready yet"
             fi
-            echo "Attempt $i: app not ready yet"
             sleep 10
           done
-          echo "::error::Deployment failed smoke test at $URL"
+          echo "::error::Deployment failed smoke test at $URL (last version seen: '${DEPLOYED:-<none>}', expected '$EXPECTED')"
           exit 1
 
       - name: Swap back after failed post-swap smoke test

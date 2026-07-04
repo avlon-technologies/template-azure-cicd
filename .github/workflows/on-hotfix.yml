@@ -23,6 +23,7 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      actions: read
     uses: ./.github/workflows/_hotfix-support.yml
     with:
       branch-type: hotfix

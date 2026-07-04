@@ -48,11 +48,15 @@ jobs:
 
       - name: Set build label
         id: set-label
+        # Inputs pass via env, never interpolated into the script.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "value=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
           else
-            echo "value=$(date +'%Y%m%d').${{ github.run_number }}" >> $GITHUB_OUTPUT
+            echo "value=$(date +'%Y%m%d').$RUN_NUMBER" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup .NET
@@ -74,11 +78,13 @@ jobs:
       - name: Build
         # InformationalVersion must be set at build time — the assembly
         # attribute is compiled in here; publish below runs with --no-build.
+        env:
+          BUILD_LABEL: ${{ steps.set-label.outputs.value }}
         run: >
           dotnet build ${{ inputs.solution }}
           --configuration Release
           --no-restore
-          /p:InformationalVersion=${{ steps.set-label.outputs.value }}
+          /p:InformationalVersion="$BUILD_LABEL"
 
       - name: Test
         id: test

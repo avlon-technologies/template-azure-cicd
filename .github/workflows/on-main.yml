@@ -77,6 +77,19 @@ jobs:
             echo "::error::v$VERSION does not resolve to a merge commit, so its stg-tested artifact cannot be located (was the PR squash-merged?). Refusing to rebuild for prod."
             exit 1
           fi
+
+          # "Artifact exists" is not "staging tested it" — the artifact is
+          # uploaded at build time, before the stg deploy. A build/stg/* tag
+          # is created only after a stg deploy passes its smoke test, so
+          # require one on the release commit before promoting.
+          STG_TAG=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/build/stg/" \
+            --jq ".[] | select(.object.sha == \"$RELEASE_SHA\") | .ref" | head -1)
+          if [ -z "$STG_TAG" ]; then
+            echo "::error::No build/stg/* tag points at $RELEASE_SHA — this build was never successfully deployed to staging. Dispatch the release/hotfix/support pipeline on the source branch, verify staging, then re-run this workflow."
+            exit 1
+          fi
+          echo "Staging verified: $STG_TAG points at $RELEASE_SHA."
+
           NAME="webapp-$RELEASE_SHA"
           RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
@@ -111,6 +124,7 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: prod
