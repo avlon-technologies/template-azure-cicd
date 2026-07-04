@@ -4,15 +4,11 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: GitHub environment name (dev | stg | prod)
-        type: string
-        required: true
-      webapp-name:
-        description: Azure App Service name to deploy to
-        type: string
-        required: true
-      azure-client-id:
-        description: App Registration client ID for OIDC login
+        description: >
+          GitHub environment name (dev | stg | prod). The App Service name and
+          OIDC client ID come from that environment's variables (WEBAPP_NAME,
+          AZURE_CLIENT_ID) — the job's `environment:` declaration scopes the
+          vars context to it.
         type: string
         required: true
       build-label:
@@ -79,7 +75,7 @@ jobs:
       - name: Login to Azure
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
-          client-id: ${{ inputs.azure-client-id }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
@@ -87,21 +83,21 @@ jobs:
         if: ${{ !inputs.slot-swap }}
         uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
         with:
-          app-name: ${{ inputs.webapp-name }}
+          app-name: ${{ vars.WEBAPP_NAME }}
           package: ./publish
 
       - name: Deploy to staging slot
         if: ${{ inputs.slot-swap }}
         uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
         with:
-          app-name: ${{ inputs.webapp-name }}
+          app-name: ${{ vars.WEBAPP_NAME }}
           slot-name: staging
           package: ./publish
 
       - name: Smoke test staging slot
         if: ${{ inputs.slot-swap }}
         env:
-          URL: https://${{ inputs.webapp-name }}-staging.azurewebsites.net
+          URL: https://${{ vars.WEBAPP_NAME }}-staging.azurewebsites.net
           EXPECTED: ${{ inputs.build-label }}
         run: |
           # Healthy = answers correctly AND reports the intended build. The
@@ -133,13 +129,13 @@ jobs:
         run: >
           az webapp deployment slot swap
           --resource-group ${{ inputs.environment }}-demo-helloworld-rg
-          --name ${{ inputs.webapp-name }}
+          --name ${{ vars.WEBAPP_NAME }}
           --slot staging
           --target-slot production
 
       - name: Smoke test deployment
         env:
-          URL: https://${{ inputs.webapp-name }}.azurewebsites.net
+          URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
           EXPECTED: ${{ inputs.build-label }}
         run: |
           # Same contract as the slot smoke test: right answer AND right
@@ -173,13 +169,13 @@ jobs:
           echo "::error::Post-swap smoke test failed — swapping the previous build back into production."
           az webapp deployment slot swap \
             --resource-group ${{ inputs.environment }}-demo-helloworld-rg \
-            --name ${{ inputs.webapp-name }} \
+            --name ${{ vars.WEBAPP_NAME }} \
             --slot staging \
             --target-slot production
 
       - name: Output deployment URL
         env:
-          URL: https://${{ inputs.webapp-name }}.azurewebsites.net
+          URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
         run: |
           echo "Deployed ${{ inputs.build-label }} to ${{ inputs.environment }}: $URL"
           {

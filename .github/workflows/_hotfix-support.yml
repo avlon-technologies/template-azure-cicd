@@ -91,8 +91,6 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
-      webapp-name: stg-demo-helloworld-api
-      azure-client-id: e205fdd4-b556-4f37-aa20-a07b68c55f2f
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
       artifact-name: webapp-${{ inputs.sha }}
       artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}

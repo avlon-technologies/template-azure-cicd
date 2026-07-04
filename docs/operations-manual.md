@@ -221,6 +221,7 @@ These live in GitHub settings, not in the workflow files — if the repo is ever
 | Rulesets `develop` / `main` / `release` | Settings → Rules | PR required; **build / Build & Test** status check required; `main` allows merge commits only; `main` source branches must include `support/*` |
 | Workflow permissions | Settings → Actions → General | Default token: **read-only**; **Allow GitHub Actions to create and approve pull requests: on** (the back-merge PR needs it) |
 | Repo variables | Settings → Secrets and variables → Actions | `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (used by `_deploy.yml`; not secrets) |
+| Environment variables | Settings → Environments → (each env) → Environment variables | `AZURE_CLIENT_ID`, `WEBAPP_NAME` per environment — `_deploy.yml` reads them via the job's `environment:` scope, so entry workflows carry no per-env config |
 | Environments | Settings → Environments | `dev`, `stg`, `prod` — each matched by a federated credential on its deploy identity |
 
 There are deliberately **no repository secrets** — Azure auth is OIDC workload identity federation (see `docs/workload-identity-federation.md`).
