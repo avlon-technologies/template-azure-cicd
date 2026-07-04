@@ -11,6 +11,13 @@ on:
         required: true
         type: string
 
+# Dispatches deploy to stg — serialize them with the other stg pipelines
+# (release/hotfix share the group). Pushes only build, so they queue per
+# branch instead of blocking each other across branches.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'deploy-stg' || format('build-{0}', github.ref) }}
+  cancel-in-progress: false
+
 jobs:
   pipeline:
     permissions:

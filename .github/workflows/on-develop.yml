@@ -11,6 +11,12 @@ on:
         required: false
         type: string
 
+# Serialize dev deploys — rapid pushes to develop must not overlap on the App
+# Service. Queued runs wait; only the newest queued run is kept.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
 jobs:
   prepare:
     name: Validate build label
@@ -58,3 +64,5 @@ jobs:
       webapp-name: dev-demo-helloworld-api
       azure-client-id: f87452ba-fd77-42d0-8ad7-124ec9524d3c
       build-label: ${{ needs.build.outputs.build-label }}
+      # Same-label redeploys rebuild HEAD, so build/dev/<label> may move.
+      allow-retag: true

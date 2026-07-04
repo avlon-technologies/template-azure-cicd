@@ -11,6 +11,12 @@ on:
         required: false
         type: string
 
+# Serialize prod deploys — overlapping runs would race the slot swap. Queued
+# runs wait; only the newest queued run is kept (superseded ones are dropped).
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
 jobs:
   prepare:
     name: Resolve version
@@ -19,6 +25,7 @@ jobs:
       version: ${{ steps.version.outputs.value }}
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
+      promote-sha: ${{ steps.promote.outputs.sha }}
     steps:
       - name: Extract version from merge commit
         id: version
@@ -44,6 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
           if [ -n "$INPUT_VERSION" ]; then
             # Rollback path: resolve the merge commit SHA from the v<version> release tag,
@@ -62,9 +70,12 @@ jobs:
               --jq '.parents[1].sha // empty')
           fi
 
+          # A resolved version with no locatable artifact is a hard error, not
+          # a rebuild: prod ships only binaries staging has tested, and a
+          # silent rebuild here would break that guarantee.
           if [ -z "$RELEASE_SHA" ]; then
-            echo "Not a merge commit — will rebuild."
-            exit 0
+            echo "::error::v$VERSION does not resolve to a merge commit, so its stg-tested artifact cannot be located (was the PR squash-merged?). Refusing to rebuild for prod."
+            exit 1
           fi
           NAME="webapp-$RELEASE_SHA"
           RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
@@ -73,12 +84,10 @@ jobs:
             echo "Promoting artifact $NAME from run $RUN_ID — build will be skipped."
             echo "artifact=$NAME" >> $GITHUB_OUTPUT
             echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
+            echo "sha=$RELEASE_SHA" >> $GITHUB_OUTPUT
           else
-            if [ -n "$INPUT_VERSION" ]; then
-              echo "::error::Artifact for v$INPUT_VERSION has expired (90-day retention). Re-dispatch the release pipeline from the release branch to produce a fresh artifact."
-              exit 1
-            fi
-            echo "No unexpired artifact for $RELEASE_SHA (no rc dispatched, or expired) — will rebuild."
+            echo "::error::No unexpired stg-tested artifact for $RELEASE_SHA — no rc was dispatched for v$VERSION, or it passed the 90-day retention window. Dispatch the release/hotfix/support pipeline on the source branch (e.g. gh workflow run on-release.yml --ref release/$VERSION -f version=$VERSION-rc.1), verify staging, then re-run this workflow."
+            exit 1
           fi
 
   build:
@@ -112,6 +121,9 @@ jobs:
       slot-swap: true
       artifact-name: ${{ needs.prepare.outputs.promote-artifact || 'webapp-publish' }}
       artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      # Tag the release-branch commit the artifact was built from (empty on
+      # the rebuild path — _deploy.yml then tags this run's HEAD).
+      source-sha: ${{ needs.prepare.outputs.promote-sha }}
 
   release:
     name: Create GitHub Release

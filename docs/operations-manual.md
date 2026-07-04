@@ -80,14 +80,14 @@ gh pr merge --merge        # merge commit — do NOT squash (see note)
 Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 1. Extracts `1.1.0` from the merge commit subject
-2. **Promotes the stg-tested artifact** (build-once-promote-many): rc dispatches store their build keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. If no rc was ever dispatched (or the artifact expired), it falls back to rebuilding from source with the release version
+2. **Promotes the stg-tested artifact** (build-once-promote-many): rc dispatches store their build keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. If no rc was ever dispatched (or the artifact expired), the run **fails** rather than silently rebuilding untested source — dispatch the release pipeline to stage a candidate, then re-run
 3. Deploys **blue/green**: the artifact goes to the `staging` slot first, is smoke-tested there, and only then swapped into production — a bad build never reaches users, and the previous build stays in the slot for instant rollback (swap back)
-4. Smoke-tests production after the swap and tags the commit `build/prod/1.1.0`
+4. Smoke-tests production after the swap — if that fails, the previous build is **automatically swapped back** — and tags the release-branch commit the artifact was built from as `build/prod/1.1.0`
 5. Creates GitHub Release **v1.1.0** with generated notes
 
 > **Promoted artifacts keep their rc stamp.** Because the promoted binary is byte-identical to what QA tested, prod's Swagger shows the rc label it was built with (e.g. `1.1.0-rc.3`) — that's a feature: it tells you exactly which candidate was promoted. The git tag (`build/prod/1.1.0`) and GitHub Release (`v1.1.0`) carry the release version.
 
-> **Always use a merge commit for release PRs.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A squash merge hides the branch name, so the build falls back to a date label and no GitHub Release is created. Squash also breaks the back-merge below.
+> **Always use a merge commit for release PRs.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A squash merge usually hides the branch name, so the build falls back to a date label and no GitHub Release is created; if a version *is* detected on a non-merge commit, the run fails outright because the stg-tested artifact can't be located. Squash also breaks the back-merge below.
 
 6. Opens a **back-merge PR** from the release branch into `develop`, so stabilization fixes aren't lost (requires the "Allow GitHub Actions to create and approve pull requests" setting — see repository settings below)
 
@@ -161,7 +161,7 @@ This is near-instant (no rebuild, no redeploy).
 gh workflow run on-main.yml --ref main -f version=1.5.0
 ```
 
-**From the UI:** Actions → **CI/CD — Main → PROD** → Run workflow → enter the version (e.g. `1.5.0`). The pipeline resolves the `v<version>` release tag, promotes the artifact that was stg-tested for that release (same artifact promotion as a normal release merge), deploys via the blue/green slot swap, and tags the commit `build/prod/<version>`. No new GitHub Release is created — only push-triggered runs create releases.
+**From the UI:** Actions → **CI/CD — Main → PROD** → Run workflow → enter the version (e.g. `1.5.0`). The pipeline resolves the `v<version>` release tag, promotes the artifact that was stg-tested for that release (same artifact promotion as a normal release merge), and deploys via the blue/green slot swap. The `build/prod/<version>` tag already points at the release commit that produced the artifact, so tagging is a no-op. No new GitHub Release is created — only push-triggered runs create releases.
 
 The artifact must be within its 90-day retention window. If it has expired, the pipeline fails with an error instructing you to re-dispatch the release pipeline from the release branch to produce a fresh artifact.
 
@@ -199,7 +199,11 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Release merged but prod tag is a date, no GitHub Release | The PR was squash-merged; the version is only detected on merge commits (main's ruleset now blocks squash, so this should no longer occur) |
 | PR can't merge: "required status check missing" | Wait for the **build / Build & Test** check from `on-pr.yml` to pass; if it never appears, the PR predates the check — push any commit to re-trigger |
 | Prod deploy failed at "Smoke test staging slot" | The new build is unhealthy — **production was not touched** (swap never happened). Fix and redeploy; nothing to roll back |
+| Prod deploy failed at "Smoke test deployment" (after the swap) | The swap went through but prod stopped answering — the pipeline **automatically swapped the previous build back**; production is running the prior version. Investigate the bad build before redeploying |
+| Release merged but prod deploy fails: "No unexpired stg-tested artifact" | No rc was ever dispatched to stg for the merged release head (or the artifact expired). Dispatch the release pipeline on the source branch to build and stage-test one, then re-run the failed prod run — it will find and promote the fresh artifact |
+| Deploy fails at "Tag deployment": "Deployment tags are immutable" | The `build/<env>/<label>` tag already points at different code — a label was reused for a different commit. Use a new label (only the dev same-label redeploy flow may move tags) |
 | Deploy failed at "Smoke test deployment" (dev/stg) | The build deployed but isn't answering — check App Service logs; the previous build is gone, so fix forward or re-run the last good workflow run |
+| Deploy run sits in "Queued" | Concurrency groups serialize deploys per environment (`deploy-dev`, `deploy-stg`, `deploy-prod`) — the run starts when the in-flight deploy to that environment finishes |
 | A job after a *skipped* job never runs | GitHub implicitly wraps `if` conditions in `success()`, which is false when **any ancestor job was skipped** — and the promotion path skips `build` by design. Downstream jobs must use `!failure() && !cancelled()` explicitly (deploy and release already do; copy that pattern for new jobs) |
 | Back-merge PR wasn't created after a release | Check the release job's "Open back-merge PR" step log. If it says "not permitted to create pull requests", re-enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** |
 | rc dispatch fails at "Resolve and validate version" | The version label doesn't match the release branch (e.g. `1.2.0-rc.1` dispatched from `release/1.3.0`). Use `<branch-version>` or `<branch-version>-<pre-release>` |
