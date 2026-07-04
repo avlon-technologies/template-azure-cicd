@@ -62,8 +62,6 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: dev
-      webapp-name: dev-demo-helloworld-api
-      azure-client-id: f87452ba-fd77-42d0-8ad7-124ec9524d3c
       build-label: ${{ needs.build.outputs.build-label }}
       # Same-label redeploys rebuild HEAD, so build/dev/<label> may move.
       allow-retag: true
