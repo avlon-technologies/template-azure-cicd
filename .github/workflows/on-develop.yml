@@ -35,12 +35,28 @@ jobs:
             echo "build-label=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          TAG="build/dev/$INPUT_LABEL"
-          if ! gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" > /dev/null 2>&1; then
-            echo "::error::Tag '$TAG' not found on this repository. Check the build label and try again."
+          # Dev deploys are not tagged — validate the label (YYYYMMDD.<run_number>)
+          # against this workflow's own run history instead.
+          if [[ ! "$INPUT_LABEL" =~ ^[0-9]{8}\.[0-9]+$ ]]; then
+            echo "::error::Build label '$INPUT_LABEL' is not in YYYYMMDD.<run_number> format."
             exit 1
           fi
-          echo "Tag $TAG exists — will rebuild HEAD stamped with label '$INPUT_LABEL'."
+          DAY_RAW="${INPUT_LABEL%%.*}"
+          RUN_NUMBER=$((10#${INPUT_LABEL##*.}))
+          DAY="${DAY_RAW:0:4}-${DAY_RAW:4:2}-${DAY_RAW:6:2}"
+          # Search from the day before too: the run may have been created just
+          # before UTC midnight relative to the build step that stamped the date.
+          if ! FROM=$(date -u -d "$DAY - 1 day" +%F 2>/dev/null); then
+            echo "::error::Build label '$INPUT_LABEL' does not contain a valid date."
+            exit 1
+          fi
+          FOUND=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/on-develop.yml/runs?created=$FROM..$DAY&per_page=100" \
+            --jq "[.workflow_runs[] | select(.run_number == $RUN_NUMBER)] | length")
+          if [ "$FOUND" = "0" ]; then
+            echo "::error::No 'CI/CD — Develop → DEV' run matches label '$INPUT_LABEL'. Check the label against the Actions run history and try again."
+            exit 1
+          fi
+          echo "Run #$RUN_NUMBER on $DAY exists — will rebuild HEAD stamped with label '$INPUT_LABEL'."
           echo "build-label=$INPUT_LABEL" >> "$GITHUB_OUTPUT"
 
   build:
@@ -63,5 +79,5 @@ jobs:
     with:
       environment: dev
       build-label: ${{ needs.build.outputs.build-label }}
-      # Same-label redeploys rebuild HEAD, so build/dev/<label> may move.
-      allow-retag: true
+      # No tag-deployment: dev deploys are disposable; the Deployments view
+      # and run history are the record.

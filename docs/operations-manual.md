@@ -23,7 +23,7 @@ gh pr create --base develop --head my-feature
 gh pr merge --merge
 ```
 
-The build is labeled `YYYYMMDD.<run_number>` and the deployed commit is tagged `build/dev/<label>`.
+The build is labeled `YYYYMMDD.<run_number>`. Dev deploys are not tagged — the **Deployments** view and the run history are the record, and the running build is always identifiable via Swagger.
 
 To manually redeploy a previous build to dev (e.g. to retry a failed deploy with the same label):
 
@@ -32,7 +32,7 @@ To manually redeploy a previous build to dev (e.g. to retry a failed deploy with
 gh workflow run on-develop.yml --ref develop -f build-label=20260703.32
 ```
 
-**From the UI:** Actions → **CI/CD — Develop → DEV** → Run workflow → enter the build label (e.g. `20260703.32`). The label must correspond to an existing `build/dev/<label>` tag — the pipeline fails fast if it doesn't. A fresh build of HEAD is stamped with that label and deployed; leave the input empty to build and deploy HEAD normally.
+**From the UI:** Actions → **CI/CD — Develop → DEV** → Run workflow → enter the build label (e.g. `20260703.32`). The label must match a previous **CI/CD — Develop → DEV** run (it's validated against the workflow's run history) — the pipeline fails fast if it doesn't. A fresh build of HEAD is stamped with that label and deployed; leave the input empty to build and deploy HEAD normally.
 
 ## Cut a release
 
@@ -173,7 +173,7 @@ The artifact must be within its 90-day retention window. If it has expired, the 
 - **Swagger** — `<app-url>/swagger` shows the exact build label, linked commit SHA, and environment of what's running.
 - **Smoke test** — already ran automatically; a green deploy job means the app answered correctly.
 - **Deployments view** — repo home → right sidebar → **Deployments** (or `/deployments`): per-environment history.
-- **Tags** — `git fetch --tags && git tag -l 'build/*'`: every successful deploy tags the exact commit as `build/<env>/<label>`.
+- **Tags** — `git fetch --tags && git tag -l 'build/*'`: every successful **stg/prod** deploy tags the exact commit as `build/stg/<label>` or `build/prod/<label>` — the audit trail of what QA/UAT tested and what shipped. Dev deploys are not tagged.
 - **Releases** — repo **Releases** page lists `vX.Y.Z` with generated notes.
 
 ## Version and branch naming
@@ -203,7 +203,7 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Release merged but prod deploy fails: "No unexpired stg-tested artifact" | No rc was ever dispatched to stg for the merged release head (or the artifact expired). Dispatch the release pipeline on the source branch to build and stage-test one, then re-run the failed prod run — it will find and promote the fresh artifact |
 | Release merged but prod deploy fails: "No build/stg/* tag points at …" | The rc artifact was built, but its stg deploy never went green (smoke test failed, deploy errored, or the dispatch was cancelled). Re-dispatch the release pipeline on the source branch, let the stg deploy pass, then re-run the prod run |
 | Smoke test fails: "reports version 'X', expected 'Y'" | The app answers but is running the wrong build — the deploy or swap didn't take effect, or the wrong artifact shipped. Check which run last deployed to that environment; redeploy the intended label |
-| Deploy fails at "Tag deployment": "Deployment tags are immutable" | The `build/<env>/<label>` tag already points at different code — a label was reused for a different commit. Use a new label (only the dev same-label redeploy flow may move tags) |
+| Deploy fails at "Tag deployment": "Deployment tags are immutable" | The `build/<env>/<label>` tag already points at different code — a label was reused for a different commit (e.g. an rc label re-dispatched after new commits landed). Use a new label |
 | Deploy failed at "Smoke test deployment" (dev/stg) | The build deployed but isn't answering — check App Service logs; the previous build is gone, so fix forward or re-run the last good workflow run |
 | Deploy run sits in "Queued" | Concurrency groups serialize deploys per environment (`deploy-dev`, `deploy-stg`, `deploy-prod`) — the run starts when the in-flight deploy to that environment finishes |
 | A job after a *skipped* job never runs | GitHub implicitly wraps `if` conditions in `success()`, which is false when **any ancestor job was skipped** — and the promotion path skips `build` by design. Downstream jobs must use `!failure() && !cancelled()` explicitly (deploy and release already do; copy that pattern for new jobs) |

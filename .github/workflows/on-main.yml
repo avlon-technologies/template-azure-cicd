@@ -136,6 +136,7 @@ jobs:
       # Tag the release-branch commit the artifact was built from (empty on
       # the rebuild path — _deploy.yml then tags this run's HEAD).
       source-sha: ${{ needs.prepare.outputs.promote-sha }}
+      tag-deployment: true
 
   release:
     name: Create GitHub Release

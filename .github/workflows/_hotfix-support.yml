@@ -94,3 +94,6 @@ jobs:
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
       artifact-name: webapp-${{ inputs.sha }}
       artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      # stg tags are the prod promotion gate's proof of a green staging
+      # deploy and the QA/UAT audit trail.
+      tag-deployment: true

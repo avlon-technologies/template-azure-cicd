@@ -12,7 +12,10 @@ on:
         type: string
         required: true
       build-label:
-        description: Build label (YYYYMMDD.run_number) used to tag the deployment commit
+        description: >
+          Build label (e.g. YYYYMMDD.run_number) shown in the run summary,
+          asserted by the smoke tests, and used for the deployment tag when
+          tag-deployment is set.
         type: string
         required: true
       slot-swap:
@@ -41,11 +44,13 @@ on:
         type: string
         required: false
         default: ''
-      allow-retag:
+      tag-deployment:
         description: >
-          Permit moving an existing build/<env>/<label> tag to a new commit.
-          Only the dev same-label redeploy flow needs this; everywhere else a
-          label that already points at a different commit fails the deploy.
+          Tag the deployed commit build/<environment>/<build-label> after a
+          successful deploy. stg/prod callers set this — stg tags are the
+          promotion gate's proof of a green staging deploy and the QA/UAT
+          audit trail; prod tags are the release audit trail. Dev deploys are
+          not tagged (the Deployments view and run history are the record).
         type: boolean
         required: false
         default: false
@@ -189,10 +194,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tag deployment
+        if: ${{ inputs.tag-deployment }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           SOURCE_SHA: ${{ inputs.source-sha }}
-          ALLOW_RETAG: ${{ inputs.allow-retag }}
         with:
           script: |
             // Tag the commit the artifact was built from — on the prod
@@ -216,16 +221,7 @@ jobs:
               });
               if (existing.data.object.sha === sha) {
                 core.info(`Tag already points at ${sha} — nothing to do.`);
-              } else if (process.env.ALLOW_RETAG === 'true') {
-                await github.rest.git.updateRef({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ref: tagRef.replace('refs/', ''),
-                  sha,
-                  force: true
-                });
-                core.info(`Moved existing tag to ${sha} (allow-retag).`);
               } else {
-                core.setFailed(`${tagRef} already points at ${existing.data.object.sha} but this deploy is ${sha}. Deployment tags are immutable outside the dev redeploy flow — use a new label.`);
+                core.setFailed(`${tagRef} already points at ${existing.data.object.sha} but this deploy is ${sha}. Deployment tags are immutable — use a new label.`);
               }
             }
