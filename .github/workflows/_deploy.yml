@@ -36,6 +36,23 @@ on:
         type: string
         required: false
         default: ''
+      source-sha:
+        description: >
+          Commit the deployed artifact was built from. Empty = this run's HEAD.
+          Set on the prod promotion/rollback path so the deployment tag points
+          at the release-branch commit that produced the artifact, not the
+          merge commit or current main HEAD.
+        type: string
+        required: false
+        default: ''
+      allow-retag:
+        description: >
+          Permit moving an existing build/<env>/<label> tag to a new commit.
+          Only the dev same-label redeploy flow needs this; everywhere else a
+          label that already points at a different commit fails the deploy.
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   deploy:
@@ -48,7 +65,7 @@ jobs:
 
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ inputs.artifact-name }}
           path: ./publish
@@ -56,7 +73,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Login to Azure
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ inputs.azure-client-id }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -64,14 +81,14 @@ jobs:
 
       - name: Deploy to App Service
         if: ${{ !inputs.slot-swap }}
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
         with:
           app-name: ${{ inputs.webapp-name }}
           package: ./publish
 
       - name: Deploy to staging slot
         if: ${{ inputs.slot-swap }}
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
         with:
           app-name: ${{ inputs.webapp-name }}
           slot-name: staging
@@ -95,6 +112,7 @@ jobs:
           exit 1
 
       - name: Swap staging slot into production
+        id: swap
         if: ${{ inputs.slot-swap }}
         run: >
           az webapp deployment slot swap
@@ -119,6 +137,20 @@ jobs:
           echo "::error::Deployment failed smoke test at $URL"
           exit 1
 
+      - name: Swap back after failed post-swap smoke test
+        # steps.swap.outcome == 'success' means the swap actually ran — a
+        # pre-swap failure (bad build caught in the slot) must NOT swap, and a
+        # non-slot deploy has nothing to swap back to. The job still fails;
+        # this only restores the previous production build.
+        if: ${{ failure() && steps.swap.outcome == 'success' }}
+        run: |
+          echo "::error::Post-swap smoke test failed — swapping the previous build back into production."
+          az webapp deployment slot swap \
+            --resource-group ${{ inputs.environment }}-demo-helloworld-rg \
+            --name ${{ inputs.webapp-name }} \
+            --slot staging \
+            --target-slot production
+
       - name: Output deployment URL
         env:
           URL: https://${{ inputs.webapp-name }}.azurewebsites.net
@@ -135,24 +167,43 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tag deployment
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          ALLOW_RETAG: ${{ inputs.allow-retag }}
         with:
           script: |
+            // Tag the commit the artifact was built from — on the prod
+            // promotion/rollback path that is the release branch head, not
+            // this run's HEAD.
+            const sha = process.env.SOURCE_SHA || context.sha;
             const tagRef = `refs/tags/build/${{ inputs.environment }}/${{ inputs.build-label }}`;
             try {
               await github.rest.git.createRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 ref: tagRef,
-                sha: context.sha
+                sha
               });
             } catch (err) {
               if (err.status !== 422) throw err;
-              await github.rest.git.updateRef({
+              const existing = await github.rest.git.getRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                ref: tagRef.replace('refs/', ''),
-                sha: context.sha,
-                force: true
+                ref: tagRef.replace('refs/', '')
               });
+              if (existing.data.object.sha === sha) {
+                core.info(`Tag already points at ${sha} — nothing to do.`);
+              } else if (process.env.ALLOW_RETAG === 'true') {
+                await github.rest.git.updateRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: tagRef.replace('refs/', ''),
+                  sha,
+                  force: true
+                });
+                core.info(`Moved existing tag to ${sha} (allow-retag).`);
+              } else {
+                core.setFailed(`${tagRef} already points at ${existing.data.object.sha} but this deploy is ${sha}. Deployment tags are immutable outside the dev redeploy flow — use a new label.`);
+              }
             }
