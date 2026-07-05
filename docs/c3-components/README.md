@@ -54,7 +54,7 @@ The two containers meet at one invariant: **the build label the pipeline intends
 
 ## Part B — The CI/CD pipeline
 
-Decomposed into **reusable workflows** (the mechanisms, prefixed `_`) composed by **entry workflows** (the branch-triggered policies).
+Decomposed into **reusable workflows** (the mechanisms, prefixed `_`) composed by **entry workflows** (the branch-triggered policies). There are three reusable workflows: `_build.yml` and `_deploy.yml` (used directly by most flows) and `_hotfix-support.yml`, a shared mechanism that wraps the prepare→build→deploy sequence for the two near-identical hotfix and support flows.
 
 ### Diagram
 
@@ -70,17 +70,24 @@ graph TB
     subgraph reusable [Reusable workflows «mechanism»]
         build[_build<br/>build · test · publish · upload]
         deploy[_deploy<br/>download · login · deploy · smoke · swap · tag]
+        hotsup[_hotfix-support<br/>shared prepare · build · deploy<br/>for hotfix + support]
     end
     prep[Version resolution & validation<br/>per-flow prepare jobs]
     promote[Artifact promotion & gating<br/>find webapp-&lt;sha&gt; · require build/stg tag]
 
     pr --> build
-    dev --> build --> deploy
-    rel --> prep --> build
-    hot --> prep --> build --> deploy
+    dev --> prep
+    rel --> prep
+    prep --> build --> deploy
+    hot --> hotsup
+    hotsup --> build
+    hotsup --> deploy
     main --> promote --> deploy
+    promote -.no version to promote → rebuild HEAD.-> build
     rel -.dispatch.-> deploy
 ```
+
+`on-hotfix.yml` and `on-support.yml` are thin wrappers: they forward the trigger context (branch type, ref, sha, run number) into `_hotfix-support.yml`, which holds their prepare→build→deploy logic. The prepare stages for the other flows (`on-develop`, `on-release`, `on-main`) live in the entry workflows themselves.
 
 ### Components
 
@@ -88,7 +95,8 @@ graph TB
 |---|---|---|
 | **Build & Test** | `_build.yml` | Restore, build (stamping the build label into `InformationalVersion`), test (publishing results as a PR check), publish, and upload the artifact. Emits the resolved `build-label`. Fails the run if any test fails. |
 | **Deploy** | `_deploy.yml` | Download the artifact, OIDC-login to Azure, deploy (direct, or slot→smoke→swap for prod), **smoke-test** (`/v1/hello` + version assertion), print the run-summary card, and tag the deployed commit. Auto-swaps back on a failed post-swap smoke test. |
-| **Version resolution & validation** | `prepare` jobs in entry workflows | Turn a branch + optional input into a build label, and reject labels that don't match the branch (e.g. `1.2.0-rc.1` from `release/1.3.0`). Keeps staging from ever being stamped with a version that doesn't belong to its branch. |
+| **Hotfix/support pipeline** | `_hotfix-support.yml` | Shared prepare→build→deploy mechanism for the two near-identical hotfix and support flows. Called by the thin `on-hotfix.yml` / `on-support.yml` wrappers, which pass it the branch type and trigger context so one definition serves both. |
+| **Version resolution & validation** | `prepare` jobs in the entry workflows (`on-develop`, `on-release`, `on-main`) and in the shared `_hotfix-support.yml` (hotfix/support) | Turn a branch + optional input into a build label, and reject labels that don't match the branch (e.g. `1.2.0-rc.1` from `release/1.3.0`). Keeps staging from ever being stamped with a version that doesn't belong to its branch. |
 | **Artifact promotion & gating** | `on-main.yml` + `_deploy.yml` inputs | On merge to `main`, locate the `webapp-<sha>` artifact for the release head, **require a `build/stg/*` tag** (proof of a green staging deploy), and deploy *that binary* with the build job skipped. Missing artifact or missing tag → the prod run fails rather than rebuilding untested source. |
 | **Branch policy** | entry workflows (`on-*.yml`) | Map trigger branch → environment, wire concurrency groups (serialize deploys per env), and set the correct permissions/flags. This is where "develop is auto-deployed but release is dispatch-gated" is decided. |
 | **Release finalization** | `on-main.yml` release job | After a prod deploy: create the GitHub Release `vX.Y.Z` and open a back-merge PR to `develop` so stabilization fixes aren't lost. |
