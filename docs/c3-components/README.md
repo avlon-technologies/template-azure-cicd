@@ -82,8 +82,8 @@ graph TB
     hot --> hotsup
     hotsup --> build
     hotsup --> deploy
-    main --> promote --> build
-    promote --> deploy
+    main --> promote --> deploy
+    promote -.no version to promote → rebuild HEAD.-> build
     rel -.dispatch.-> deploy
 ```
 

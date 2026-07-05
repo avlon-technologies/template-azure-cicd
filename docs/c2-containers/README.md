@@ -49,7 +49,7 @@ The system splits into two **planes**: a **delivery plane** (how code becomes a 
 | Container | Technology | Responsibility |
 |---|---|---|
 | **Source Repository** | Git on GitHub | Holds the application code, tests, and the workflow definitions that *are* the pipeline. Branch rulesets enforce PR-only merges and required checks — the quality gate lives here. |
-| **CI/CD Pipeline** | GitHub Actions (three reusable + five entry workflows) | Builds, tests, publishes, deploys, promotes, tags, releases, and back-merges. Mechanisms live in the reusable workflows (`_build`, `_deploy`, and `_hotfix-support` — a shared prepare→build→deploy for the hotfix/support flows); branch policy lives in the entry workflows. Decomposed in [C3](../c3-components/README.md). |
+| **CI/CD Pipeline** | GitHub Actions (three reusable + six entry workflows) | Builds, tests, publishes, deploys, promotes, tags, releases, and back-merges. Mechanisms live in the reusable workflows (`_build`, `_deploy`, and `_hotfix-support` — a shared prepare→build→deploy for the hotfix/support flows); branch policy lives in the entry workflows. Decomposed in [C3](../c3-components/README.md). |
 | **Build Artifact Store** | GitHub Actions artifacts | Holds compiled publish output. Two naming schemes: `webapp-publish` (ephemeral, 1-day) for throwaway builds, and `webapp-<sha>` (90-day) for promotable release candidates. **This store is what makes "build once, promote many" possible** — prod pulls the exact bytes stg tested. |
 
 ### Runtime plane (Azure)
