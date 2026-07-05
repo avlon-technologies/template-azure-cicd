@@ -35,6 +35,8 @@ builder.Services
         options.SubstituteApiVersionInUrl = true;
     });
 
+builder.Services.AddHealthChecks();
+
 builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer((document, context, cancellationToken) =>
@@ -49,8 +51,13 @@ builder.Services.AddOpenApi(options =>
 
 var app = builder.Build();
 
-// Root stays unversioned: the App Gateway health probe targets "/".
+// Root stays unversioned and returns the plain greeting.
 app.MapGet("/", () => "Hello World!").ExcludeFromDescription();
+
+// Dedicated liveness probe, decoupled from the greeting endpoint: the App
+// Gateway health probe targets "/healthz". Register dependency checks here
+// (Key Vault, etc.) to have them reported as Degraded/Unhealthy.
+app.MapHealthChecks("/healthz").ExcludeFromDescription();
 
 // API endpoints are versioned by URL segment; breaking changes are published
 // as a new version in this set while old versions keep serving from the same

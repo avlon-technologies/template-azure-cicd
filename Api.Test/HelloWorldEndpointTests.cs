@@ -23,6 +23,17 @@ public class HelloWorldEndpointTests : IClassFixture<WebApplicationFactory<Progr
     }
 
     [Fact]
+    public async Task Healthz_ReportsHealthy()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/healthz");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("Healthy", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task V1Hello_ReturnsHelloWorld()
     {
         var client = _factory.CreateClient();
