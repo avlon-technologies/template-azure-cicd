@@ -1,0 +1,99 @@
+name: Hotfix/Support Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      branch-type:
+        description: hotfix or support
+        type: string
+        required: true
+      version:
+        description: Dispatch version label — empty on push
+        type: string
+        required: false
+        default: ''
+      event-name:
+        description: github.event_name from the calling workflow
+        type: string
+        required: true
+      ref-name:
+        description: github.ref_name from the calling workflow
+        type: string
+        required: true
+      sha:
+        description: github.sha from the calling workflow
+        type: string
+        required: true
+      run-number:
+        description: github.run_number from the calling workflow
+        type: string
+        required: true
+
+jobs:
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      promote-artifact: ${{ steps.promote.outputs.artifact }}
+      promote-run-id: ${{ steps.promote.outputs.run-id }}
+    steps:
+      - name: Resolve and validate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref-name }}
+          BRANCH_TYPE: ${{ inputs.branch-type }}
+          RUN_NUMBER: ${{ inputs.run-number }}
+        run: |
+          BRANCH_VERSION="${REF#${BRANCH_TYPE}/}"
+          if [ -n "$INPUT_VERSION" ]; then
+            if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
+              echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
+              exit 1
+            fi
+            echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            SUFFIX=$([[ "$BRANCH_TYPE" == "hotfix" ]] && echo "hotfix" || echo "patch")
+            echo "value=$BRANCH_VERSION-$SUFFIX.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Locate existing artifact
+        id: promote
+        if: inputs.event-name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          NAME="webapp-$SHA"
+          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          if [ -n "$RUN_ID" ]; then
+            echo "Reusing existing artifact $NAME from run $RUN_ID — build will be skipped."
+            echo "artifact=$NAME" >> $GITHUB_OUTPUT
+            echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
+          else
+            echo "No existing artifact for $SHA — will build."
+          fi
+
+  build:
+    if: needs.prepare.outputs.promote-run-id == ''
+    needs: prepare
+    uses: ./.github/workflows/_build.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      artifact-name: ${{ inputs.event-name == 'workflow_dispatch' && format('webapp-{0}', inputs.sha) || 'webapp-publish' }}
+      retention-days: ${{ inputs.event-name == 'workflow_dispatch' && 90 || 1 }}
+
+  deploy:
+    if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
+    needs: [prepare, build]
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: stg
+      build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
+      artifact-name: webapp-${{ inputs.sha }}
+      artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      # stg tags are the prod promotion gate's proof of a green staging
+      # deploy and the QA/UAT audit trail.
+      tag-deployment: true

@@ -7,83 +7,28 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version label (e.g. 1.4.1-rc.1)'
-        required: true
+        description: 'Version label (e.g. 1.4.1-rc.1). Leave empty for an auto-generated build label.'
+        required: false
         type: string
 
+# Dispatches deploy to stg — serialize them with the other stg pipelines
+# (release/support share the group). Pushes only build, so they queue per
+# branch instead of blocking each other across branches.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'deploy-stg' || format('build-{0}', github.ref) }}
+  cancel-in-progress: false
+
 jobs:
-  prepare:
-    name: Resolve version
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.value }}
-      promote-artifact: ${{ steps.promote.outputs.artifact }}
-      promote-run-id: ${{ steps.promote.outputs.run-id }}
-    steps:
-      - name: Resolve and validate version
-        id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          REF: ${{ github.ref_name }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          BRANCH_VERSION="${REF#hotfix/}"
-          if [ -n "$INPUT_VERSION" ]; then
-            # Dispatched: the label must belong to the hotfix branch it runs
-            # from, so staging can't be stamped/tagged with a foreign version.
-            if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
-              echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
-              exit 1
-            fi
-            echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=$BRANCH_VERSION-hotfix.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Locate existing artifact
-        id: promote
-        # On repeated dispatches with the same label, reuse the artifact
-        # already built for this commit rather than rebuilding.
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          NAME="webapp-$GITHUB_SHA"
-          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
-          if [ -n "$RUN_ID" ]; then
-            echo "Reusing existing artifact $NAME from run $RUN_ID — build will be skipped."
-            echo "artifact=$NAME" >> $GITHUB_OUTPUT
-            echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
-          else
-            echo "No existing artifact for $GITHUB_SHA — will build."
-          fi
-
-  build:
-    if: needs.prepare.outputs.promote-run-id == ''
-    needs: prepare
-    uses: ./.github/workflows/_build.yml
-    with:
-      version: ${{ needs.prepare.outputs.version }}
-      artifact-name: ${{ github.event_name == 'workflow_dispatch' && format('webapp-{0}', github.sha) || 'webapp-publish' }}
-      retention-days: ${{ github.event_name == 'workflow_dispatch' && 90 || 1 }}
-
-  deploy:
-    # Only deploy when manually dispatched — not on every push.
-    # !failure() && !cancelled() instead of implicit success(): success() is false when
-    # ANY ancestor job was skipped, and on the promotion path the build job is skipped.
-    if: ${{ !failure() && !cancelled() && github.event_name == 'workflow_dispatch' }}
-    needs: [prepare, build]
-    # Callers must grant what the reusable workflow's job requests — the repo
-    # default token is read-only and called workflows cannot elevate it.
+  pipeline:
     permissions:
       id-token: write
       contents: write
-    uses: ./.github/workflows/_deploy.yml
+      actions: read
+    uses: ./.github/workflows/_hotfix-support.yml
     with:
-      environment: stg
-      webapp-name: stg-demo-helloworld-api
-      azure-client-id: e205fdd4-b556-4f37-aa20-a07b68c55f2f
-      build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
-      artifact-name: webapp-${{ github.sha }}
-      artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      branch-type: hotfix
+      version: ${{ inputs.version || '' }}
+      event-name: ${{ github.event_name }}
+      ref-name: ${{ github.ref_name }}
+      sha: ${{ github.sha }}
+      run-number: ${{ github.run_number }}

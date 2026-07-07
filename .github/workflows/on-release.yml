@@ -8,9 +8,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version label (e.g. 1.1.0-rc.1)'
-        required: true
+        description: 'Release version label (e.g. 1.1.0-rc.1). Leave empty for an auto-generated build label.'
+        required: false
         type: string
+
+# Dispatches deploy to stg — serialize them with the other stg pipelines
+# (hotfix/support share the group). Pushes only build, so they queue per
+# branch instead of blocking each other across branches.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'deploy-stg' || format('build-{0}', github.ref) }}
+  cancel-in-progress: false
 
 jobs:
   prepare:
@@ -68,6 +75,10 @@ jobs:
   build:
     if: needs.prepare.outputs.promote-run-id == ''
     needs: prepare
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
@@ -87,11 +98,13 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
-      webapp-name: stg-demo-helloworld-api
-      azure-client-id: e205fdd4-b556-4f37-aa20-a07b68c55f2f
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
       artifact-name: webapp-${{ github.sha }}
       artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      # stg tags are the prod promotion gate's proof of a green staging
+      # deploy and the QA/UAT audit trail.
+      tag-deployment: true

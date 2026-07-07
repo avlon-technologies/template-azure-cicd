@@ -9,8 +9,17 @@ on:
       - develop
       - main
 
+# A new push to the PR supersedes the running build — cancel it.
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_build.yml
 
   guard-main-source:
