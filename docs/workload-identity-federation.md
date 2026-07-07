@@ -42,7 +42,7 @@ sequenceDiagram
 | Identity | The service principal the job authenticates as | App registrations `demo-helloworld-github-deploy-{dev,stg,prod}` in Entra ID |
 | Trust rule | Which JWTs Entra ID will accept | A federated credential on each app registration, matching one repo + environment |
 | Permissions | What the identity may do | RBAC role (Website Contributor) scoped to that environment's resource group |
-| Addressing | Which identity/tenant/subscription to target | `azure-client-id` input + `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` repo variables |
+| Addressing | Which identity/tenant/subscription to target | `AZURE_CLIENT_ID` environment variable + `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` repo variables |
 
 Each environment has its own app registration scoped to its own resource group — a dev deploy cannot affect prod resources.
 
