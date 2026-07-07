@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version label (e.g. 1.4.1-rc.1)'
-        required: true
+        description: 'Version label (e.g. 1.4.1-rc.1). Leave empty for an auto-generated build label.'
+        required: false
         type: string
 
 # Dispatches deploy to stg — serialize them with the other stg pipelines
