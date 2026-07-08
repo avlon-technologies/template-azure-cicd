@@ -129,3 +129,22 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ./publish
           retention-days: ${{ inputs.retention-days }}
+
+      - name: Write build-label marker
+        # Companion to commit-keyed (promotable) artifacts: an artifact whose
+        # NAME records the label the binary was stamped with
+        # (<artifact-name>.label.<label>), so a later dispatch can check a
+        # requested label against the existing artifact without downloading
+        # it. The default throwaway artifact name doesn't need one.
+        if: inputs.artifact-name != 'webapp-publish'
+        env:
+          BUILD_LABEL: ${{ steps.set-label.outputs.value }}
+        run: printf '%s\n' "$BUILD_LABEL" > "$RUNNER_TEMP/build-label-marker"
+
+      - name: Upload build-label marker
+        if: inputs.artifact-name != 'webapp-publish'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}.label.${{ steps.set-label.outputs.value }}
+          path: ${{ runner.temp }}/build-label-marker
+          retention-days: ${{ inputs.retention-days }}

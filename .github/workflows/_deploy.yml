@@ -198,13 +198,16 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           SOURCE_SHA: ${{ inputs.source-sha }}
+          # Via env, not interpolated into the script source — a label can't
+          # inject JS even if upstream validation is ever loosened.
+          TAG_REF: refs/tags/build/${{ inputs.environment }}/${{ inputs.build-label }}
         with:
           script: |
             // Tag the commit the artifact was built from — on the prod
             // promotion/rollback path that is the release branch head, not
             // this run's HEAD.
             const sha = process.env.SOURCE_SHA || context.sha;
-            const tagRef = `refs/tags/build/${{ inputs.environment }}/${{ inputs.build-label }}`;
+            const tagRef = process.env.TAG_REF;
             try {
               await github.rest.git.createRef({
                 owner: context.repo.owner,

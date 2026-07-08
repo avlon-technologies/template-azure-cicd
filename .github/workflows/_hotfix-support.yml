@@ -34,7 +34,9 @@ jobs:
     name: Resolve version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.value }}
+      # When an existing artifact is reused, its stamped label (from the
+      # promote step) wins over the resolved input/auto label.
+      version: ${{ steps.promote.outputs.version || steps.version.outputs.value }}
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
     steps:
@@ -45,6 +47,7 @@ jobs:
           REF: ${{ inputs.ref-name }}
           BRANCH_TYPE: ${{ inputs.branch-type }}
           RUN_NUMBER: ${{ inputs.run-number }}
+          EVENT: ${{ inputs.event-name }}
         run: |
           # The dispatch form's branch selector defaults to the repo's default
           # branch (develop) — reject anything that isn't actually a
@@ -61,29 +64,57 @@ jobs:
               echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
               exit 1
             fi
-            echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+            VALUE="$INPUT_VERSION"
           else
             SUFFIX=$([[ "$BRANCH_TYPE" == "hotfix" ]] && echo "hotfix" || echo "patch")
-            echo "value=$BRANCH_VERSION-$SUFFIX.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+            VALUE="$BRANCH_VERSION-$SUFFIX.$RUN_NUMBER"
           fi
+          # Dispatch labels become artifact/marker names and git tags —
+          # restrict to a safe charset. Checked on the RESOLVED value, not
+          # just the input: the auto-generated label inherits the branch
+          # name, which can carry characters artifact names reject.
+          if [ "$EVENT" = "workflow_dispatch" ] && [[ ! "$VALUE" =~ ^[0-9A-Za-z.-]+$ ]]; then
+            echo "::error::Label '$VALUE' contains unsupported characters (allowed: letters, digits, '.', '-'). Supply a valid version input, or rename the branch."
+            exit 1
+          fi
+          echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Locate existing artifact
         id: promote
+        # Same contract as the release pipeline: reuse is only valid for the
+        # label the binary was stamped with — a mismatched label fails here,
+        # before anything deploys, instead of at the post-deploy smoke test.
+        # An empty version input adopts the existing label.
         if: inputs.event-name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           NAME="webapp-$SHA"
           RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
-          if [ -n "$RUN_ID" ]; then
-            echo "Reusing existing artifact $NAME from run $RUN_ID — build will be skipped."
-            echo "artifact=$NAME" >> $GITHUB_OUTPUT
-            echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
-          else
+          if [ -z "$RUN_ID" ]; then
             echo "No existing artifact for $SHA — will build."
+            exit 0
           fi
+          # The build uploads a marker artifact whose name carries the label
+          # the binary was stamped with: <artifact-name>.label.<label>.
+          EXISTING_LABEL=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq ".artifacts[].name | select(startswith(\"$NAME.label.\"))" | head -1)
+          EXISTING_LABEL="${EXISTING_LABEL#"$NAME.label."}"
+          if [ -z "$EXISTING_LABEL" ]; then
+            echo "Artifact $NAME exists but carries no label marker (built before markers were introduced) — rebuilding with the requested label."
+            exit 0
+          fi
+          if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$EXISTING_LABEL" ]; then
+            echo "::error::This commit was already built and stamped as '$EXISTING_LABEL' — deploying that binary as '$INPUT_VERSION' would ship an app that reports the wrong version. Re-dispatch with '$EXISTING_LABEL' (or leave the version empty to reuse it), or push a new commit to build '$INPUT_VERSION'."
+            exit 1
+          fi
+          echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL') from run $RUN_ID — build will be skipped."
+          echo "artifact=$NAME" >> $GITHUB_OUTPUT
+          echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "version=$EXISTING_LABEL" >> $GITHUB_OUTPUT
 
   build:
     if: needs.prepare.outputs.promote-run-id == ''
