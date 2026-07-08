@@ -36,21 +36,33 @@ jobs:
           REF: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
+          # The dispatch form's branch selector defaults to the repo's default
+          # branch (develop) — reject anything that isn't actually a release
+          # or milestone branch before touching version logic, so a mis-set
+          # selector fails fast instead of building/deploying the wrong ref.
+          if [[ "$REF" == release/* ]]; then
+            BRANCH_KIND=release
+            BRANCH_VERSION="${REF#release/}"
+          elif [[ "$REF" == milestone/* ]]; then
+            BRANCH_KIND=milestone
+            BRANCH_VERSION="${REF#milestone/}"
+          else
+            echo "::error::This workflow must be run from a release/* or milestone/* branch, not '$REF'. Check the 'Use workflow from' branch selector on the dispatch form — it defaults to the repository's default branch."
+            exit 1
+          fi
+
           if [ -n "$INPUT_VERSION" ]; then
             # Dispatched: the label must belong to the release branch it runs
             # from, so staging can't be stamped/tagged with a foreign version.
-            if [[ "$REF" == release/* ]]; then
-              BRANCH_VERSION="${REF#release/}"
-              if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
-                echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
-                exit 1
-              fi
+            if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
+              echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
+              exit 1
             fi
             echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
-          elif [[ "$REF" == release/* ]]; then
-            echo "value=${REF#release/}-build.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH_KIND" = release ]; then
+            echo "value=$BRANCH_VERSION-build.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
           else
-            echo "value=ms-${REF#milestone/}.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "value=ms-$BRANCH_VERSION.$RUN_NUMBER" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Locate existing rc artifact
