@@ -20,10 +20,17 @@ concurrency:
 
 jobs:
   pipeline:
+    # Union of everything the nested reusable workflows request: _build.yml
+    # needs checks/pull-requests write (test results check), _deploy.yml
+    # needs id-token/contents write + actions read. A called workflow cannot
+    # exceed its caller's grant — a missing permission here fails the run
+    # instantly with startup_failure and no logs.
     permissions:
       id-token: write
       contents: write
       actions: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_hotfix-support.yml
     with:
       branch-type: hotfix
