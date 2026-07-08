@@ -30,20 +30,38 @@ jobs:
     steps:
       - name: Extract version from merge commit
         id: version
-        # Push: parse the merge commit subject for a release/hotfix/support branch name.
+        # Push: parse the merge commit subject for a release/hotfix/support
+        # branch name — a subject that doesn't parse is a hard error (see below).
         # Dispatch with version: use the supplied version directly (rollback path).
         # Dispatch without version: no version → _build.yml falls back to date label.
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           INPUT_VERSION: ${{ inputs.version }}
+          EVENT: ${{ github.event_name }}
         run: |
           if [ -n "$INPUT_VERSION" ]; then
+            # Rollback targets a released version — the v<X.Y.Z> tag and the
+            # API paths below are only meaningful for that exact shape.
+            if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Version '$INPUT_VERSION' is not a released version number (expected X.Y.Z, e.g. 1.5.0 — see the Releases page). Leave the input empty to redeploy current main."
+              exit 1
+            fi
             echo "value=$INPUT_VERSION" >> $GITHUB_OUTPUT
             echo "branch=" >> $GITHUB_OUTPUT
             echo "Rollback dispatch: targeting version $INPUT_VERSION"
           else
             BRANCH=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
             VERSION="${BRANCH#*/}"
+            # main only receives release/hotfix/support merges (ruleset-
+            # enforced), so a push whose subject doesn't name one cannot be
+            # mapped to a stg-tested artifact. Fail rather than fall through
+            # to a fresh date-labeled rebuild that would ship untested source
+            # to prod. (A version-less rebuild remains available as an
+            # explicit escape hatch: dispatch this workflow with no input.)
+            if [ "$EVENT" = "push" ] && [ -z "$VERSION" ]; then
+              echo "::error::Could not parse a release/hotfix/support branch from the merge commit subject '$(echo "$COMMIT_MESSAGE" | head -1)'. Refusing to rebuild for prod — the stg-tested artifact cannot be located without a version. Keep the default merge commit message ('Merge pull request #N from …/release/X.Y.Z'); to redeploy anyway, dispatch this workflow manually."
+              exit 1
+            fi
             echo "value=$VERSION" >> $GITHUB_OUTPUT
             echo "branch=$BRANCH" >> $GITHUB_OUTPUT
             echo "Resolved version: '${VERSION:-<none, using date label>}' (source branch: '${BRANCH:-<none>}')"
