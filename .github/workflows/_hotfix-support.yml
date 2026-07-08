@@ -88,6 +88,10 @@ jobs:
   build:
     if: needs.prepare.outputs.promote-run-id == ''
     needs: prepare
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
@@ -97,6 +101,10 @@ jobs:
   deploy:
     if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
     needs: [prepare, build]
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg

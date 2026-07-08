@@ -5,3 +5,9 @@ A minimal .NET web API used as a reference implementation for a production-grade
 See [docs/operations-manual.md](docs/operations-manual.md) for how to build, release, roll back, and troubleshoot, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the C4 architecture documentation.
 
 Shipped versions are listed on the [Releases page](https://github.com/pixelbits-mk/cicd-demo/releases); every stg/prod deploy is also tagged `build/<env>/<label>`.
+
+## Quick start
+
+```sh
+dotnet run --project Api    # then browse http://localhost:5000/swagger
+```
