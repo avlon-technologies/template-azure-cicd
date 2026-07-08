@@ -53,7 +53,7 @@ Deploys to stg are gated on a human trigger (manual dispatch). Give each candida
 **From the UI:**
 1. **Actions** tab → **CI/CD — Release → STG** (left sidebar)
 2. Click **Run workflow**
-3. **Use workflow from:** select the release branch (e.g. `release/1.1.0`) — easy to miss; it defaults to `main`
+3. **Use workflow from:** select the release branch (e.g. `release/1.1.0`) — easy to miss; it defaults to the repository's default branch (`develop`), and the pipeline fails fast if the selected branch isn't a `release/*` or `milestone/*` branch
 4. **version:** enter the candidate label, e.g. `1.1.0-rc.1`
 5. Click **Run workflow**
 
@@ -113,7 +113,7 @@ git push -u origin hotfix/1.1.1
 
 Pushes build and test only — no automatic stg deploy. When ready to verify on stg, dispatch manually:
 
-**From the UI:** Actions → **CI/CD — Hotfix → STG** → Run workflow → select the hotfix branch → enter the version label (e.g. `1.1.1` or `1.1.1-rc.1`)
+**From the UI:** Actions → **CI/CD — Hotfix → STG** → Run workflow → select the hotfix branch (the **Use workflow from** selector defaults to `develop` — same trap as the release dispatch; the pipeline fails fast if the branch isn't `hotfix/*`) → enter the version label (e.g. `1.1.1` or `1.1.1-rc.1`)
 
 **From the command line:**
 ```
