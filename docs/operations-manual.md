@@ -89,7 +89,7 @@ Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 > **Always use a merge commit for release PRs.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A squash merge usually hides the branch name, so the build falls back to a date label and no GitHub Release is created; if a version *is* detected on a non-merge commit, the run fails outright because the stg-tested artifact can't be located. Squash also breaks the back-merge below.
 
-6. Opens a **back-merge PR** from the release branch into `develop`, so stabilization fixes aren't lost (requires the "Allow GitHub Actions to create and approve pull requests" setting — see repository settings below). This runs as its own `backmerge` job, **in parallel with the deploy** rather than after it: the commits are on `main` the moment the PR merges, so `develop` needs them back even if the prod deploy fails or is still waiting on an environment approval. (For **support** merges the job cherry-picks instead of back-merging — see the support section.)
+6. Opens a **back-merge PR** from the release branch into `develop`, so stabilization fixes aren't lost (requires the "Allow GitHub Actions to create and approve pull requests" setting — see repository settings below). This runs as its own `backmerge` job, **in parallel with the deploy** rather than after it: the commits are on `main` the moment the PR merges, so `develop` needs them back even if the prod deploy fails or is still waiting on an environment approval. (For **hotfix and support** merges the job cherry-picks onto a `backport/<version>` branch instead of back-merging the source branch — see the hotfix section.)
 
 The back-merge PR is created automatically but merged manually — review it (conflicts with ongoing develop work are possible), merge with a merge commit, then delete the release branch:
 
@@ -120,7 +120,7 @@ Pushes build and test only — no automatic stg deploy. When ready to verify on 
 gh workflow run on-hotfix.yml --ref hotfix/1.1.1 -f version=1.1.1-rc.1
 ```
 
-When verified, PR `hotfix/1.1.1 → main` (merge commit). Merging triggers **CI/CD — Main → PROD**, which auto-detects `1.1.1` from the merge commit subject, promotes the stg-tested artifact, creates GitHub Release `v1.1.1`, and opens a back-merge PR to `develop`.
+When verified, PR `hotfix/1.1.1 → main` (merge commit). Merging triggers **CI/CD — Main → PROD**, which auto-detects `1.1.1` from the merge commit subject, promotes the stg-tested artifact, creates GitHub Release `v1.1.1`, and raises a **cherry-pick backport PR** to `develop`: because hotfix branches are cut from `main` (not `develop`), their history is never merged into `develop` directly — the `backmerge` job cherry-picks the merge commit's diff (`-m 1`) onto a `backport/1.1.1` branch and opens the PR from that. If the cherry-pick hits conflicts, the job fails with the exact manual commands to run; if `develop` already contains the change, it skips gracefully.
 
 The version label must match the hotfix branch: `1.1.1` or `1.1.1-<pre-release>`. Re-dispatching the same label skips the rebuild and redeploys the existing artifact (same rules as the release flow).
 
@@ -133,7 +133,7 @@ git checkout -b support/1.4.1 v1.4.0
 git push -u origin support/1.4.1
 ```
 
-The workflow (`on-support.yml`) behaves identically to the hotfix flow: pushes build and test only, deploys to stg on manual dispatch, and merging to `main` triggers full prod promotion and a GitHub Release `v1.4.1`. The flow back to `develop` differs: because a support branch is rooted at an **old version tag**, its history is never merged into `develop` directly. Instead the `backmerge` job **cherry-picks** the merge commit's diff onto a `backport/<version>` branch and opens a PR from that. If the cherry-pick hits conflicts (likely when `develop` has drifted far from the supported version), the job fails with the manual commands to run — resolve locally and open the PR by hand. If `develop` already contains the change, the job skips gracefully.
+The workflow (`on-support.yml`) behaves identically to the hotfix flow: pushes build and test only, deploys to stg on manual dispatch, and merging to `main` triggers full prod promotion, a GitHub Release `v1.4.1`, and the same **cherry-pick backport PR** to `develop` as a hotfix (see the hotfix section). Conflicts are more likely here than for hotfixes — `develop` has usually drifted far from the old supported version — so expect to finish some backports manually using the commands from the failed job's log.
 
 **From the command line:**
 ```
@@ -208,7 +208,7 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Deploy run sits in "Queued" | Concurrency groups serialize deploys per environment (`deploy-dev`, `deploy-stg`, `deploy-prod`) — the run starts when the in-flight deploy to that environment finishes |
 | A job after a *skipped* job never runs | GitHub implicitly wraps `if` conditions in `success()`, which is false when **any ancestor job was skipped** — and the promotion path skips `build` by design. Downstream jobs must use `!failure() && !cancelled()` explicitly (deploy and release already do; copy that pattern for new jobs) |
 | Back-merge PR wasn't created after a release | Check the `backmerge` job's log. If it says "not permitted to create pull requests", re-enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** |
-| Backport PR wasn't created after a support merge | The cherry-pick onto `develop` hit conflicts — the `backmerge` job log contains the exact manual commands (`git cherry-pick -m 1 <merge-sha>` onto a `backport/<version>` branch); resolve and open the PR by hand |
+| Backport PR wasn't created after a hotfix/support merge | The cherry-pick onto `develop` hit conflicts — the `backmerge` job log contains the exact manual commands (`git cherry-pick -m 1 <merge-sha>` onto a `backport/<version>` branch); resolve and open the PR by hand |
 | rc dispatch fails at "Resolve and validate version" | The version label doesn't match the release branch (e.g. `1.2.0-rc.1` dispatched from `release/1.3.0`). Use `<branch-version>` or `<branch-version>-<pre-release>` |
 | Re-dispatch with same label rebuilds instead of reusing artifact | The prior `webapp-<sha>` artifact has expired (90-day retention). A fresh build is the correct fallback — the new artifact will be used for any subsequent redeploys and for prod promotion |
 | Prod rollback dispatch fails: "Artifact for v… has expired" | The stg-tested artifact for that release is beyond its 90-day window. Re-dispatch the release pipeline from the release branch (`gh workflow run on-release.yml --ref release/X.Y.Z -f version=X.Y.Z-rc.1`) to rebuild the artifact, then retry the rollback dispatch |

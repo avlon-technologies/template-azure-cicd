@@ -182,11 +182,11 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Open back-merge PR to develop (release/hotfix)
+      - name: Open back-merge PR to develop (release)
         # Bookkeeping only — merging stays a human decision (conflicts with
         # ongoing develop work are possible). Skips gracefully if the source
         # branch is already gone or develop already contains it.
-        if: ${{ !startsWith(needs.prepare.outputs.source-branch, 'support/') }}
+        if: ${{ startsWith(needs.prepare.outputs.source-branch, 'release/') }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -217,16 +217,17 @@ jobs:
           fi
 
       - name: Checkout for cherry-pick
-        if: ${{ startsWith(needs.prepare.outputs.source-branch, 'support/') }}
+        if: ${{ !startsWith(needs.prepare.outputs.source-branch, 'release/') }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
-      - name: Cherry-pick support fix and open backport PR
-        # A support branch is rooted at an old version tag — a branch merge
-        # into develop would confront years of drifted history. Cherry-pick
-        # the merge commit's combined diff (-m 1) onto develop instead.
-        if: ${{ startsWith(needs.prepare.outputs.source-branch, 'support/') }}
+      - name: Cherry-pick fix and open backport PR (hotfix/support)
+        # Hotfix and support branches are cut from main or an old version
+        # tag, never from develop — their history is foreign to develop, so
+        # a branch merge is the wrong shape. Cherry-pick the merge commit's
+        # combined diff (-m 1) onto a branch off develop instead.
+        if: ${{ !startsWith(needs.prepare.outputs.source-branch, 'release/') }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -258,4 +259,4 @@ jobs:
             --base develop \
             --head "$BACKPORT" \
             --title "Backport $VERSION to develop" \
-            --body "Automated follow-up to merging \`$SOURCE_BRANCH\` into \`main\` (v$VERSION): cherry-picks the support fix onto \`develop\` (the support branch's old-tag history is never merged directly). Merge with a merge commit."
+            --body "Automated follow-up to merging \`$SOURCE_BRANCH\` into \`main\` (v$VERSION): cherry-picks the fix onto \`develop\` (hotfix/support branches are cut from \`main\` or old tags, so their history is never merged into \`develop\` directly). Merge with a merge commit."
