@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
+      source-branch: ${{ steps.version.outputs.branch }}
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
       promote-sha: ${{ steps.promote.outputs.sha }}
@@ -38,11 +39,14 @@ jobs:
         run: |
           if [ -n "$INPUT_VERSION" ]; then
             echo "value=$INPUT_VERSION" >> $GITHUB_OUTPUT
+            echo "branch=" >> $GITHUB_OUTPUT
             echo "Rollback dispatch: targeting version $INPUT_VERSION"
           else
-            VERSION=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d/ -f2 || true)
+            BRANCH=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+            VERSION="${BRANCH#*/}"
             echo "value=$VERSION" >> $GITHUB_OUTPUT
-            echo "Resolved version: '${VERSION:-<none, using date label>}'"
+            echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+            echo "Resolved version: '${VERSION:-<none, using date label>}' (source branch: '${BRANCH:-<none>}')"
           fi
 
       - name: Locate promotable release artifact
@@ -147,7 +151,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - name: Create release v${{ needs.prepare.outputs.version }}
         env:
@@ -164,20 +167,31 @@ jobs:
               --generate-notes
           fi
 
-      - name: Open back-merge PR to develop
+  backmerge:
+    name: Back-merge to develop
+    # Its own job, parallel to deploy (not downstream of it): the merged
+    # commits are already on main the moment the PR lands, so develop needs
+    # them back regardless of how the prod deploy goes (fix-forward). Only
+    # the deploy job carries the prod environment's approval gate — this job
+    # starts as soon as the merge triggers the run. Push-only: dispatches
+    # redeploy versions whose back-merge already happened.
+    if: ${{ !failure() && !cancelled() && github.event_name == 'push' && needs.prepare.outputs.source-branch != '' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Open back-merge PR to develop (release)
         # Bookkeeping only — merging stays a human decision (conflicts with
         # ongoing develop work are possible). Skips gracefully if the source
         # branch is already gone or develop already contains it.
+        if: ${{ startsWith(needs.prepare.outputs.source-branch, 'release/') }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          BRANCH: ${{ needs.prepare.outputs.source-branch }}
         run: |
-          BRANCH=$(echo "$COMMIT_MESSAGE" | head -1 | grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-          if [ -z "$BRANCH" ]; then
-            echo "Could not detect source branch from commit message — skipping back-merge PR."
-            exit 0
-          fi
           if ! gh api "repos/$GITHUB_REPOSITORY/branches/$BRANCH" > /dev/null 2>&1; then
             echo "Branch $BRANCH no longer exists — skipping back-merge PR."
           elif [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
@@ -191,7 +205,7 @@ jobs:
               --base develop \
               --head "$BRANCH" \
               --title "Back-merge $BRANCH into develop" \
-              --body "Automated follow-up to the v$VERSION production deploy: brings fixes from \`$BRANCH\` back into \`develop\`. Merge with a merge commit." \
+              --body "Automated follow-up to merging \`$BRANCH\` into \`main\` (v$VERSION): brings its fixes back into \`develop\`. Merge with a merge commit." \
               2>&1) && echo "$OUTPUT" || {
                 if echo "$OUTPUT" | grep -q "No commits between"; then
                   echo "No back-merge needed (develop already contains $BRANCH)."
@@ -201,3 +215,48 @@ jobs:
                 fi
               }
           fi
+
+      - name: Checkout for cherry-pick
+        if: ${{ !startsWith(needs.prepare.outputs.source-branch, 'release/') }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Cherry-pick fix and open backport PR (hotfix/support)
+        # Hotfix and support branches are cut from main or an old version
+        # tag, never from develop — their history is foreign to develop, so
+        # a branch merge is the wrong shape. Cherry-pick the merge commit's
+        # combined diff (-m 1) onto a branch off develop instead.
+        if: ${{ !startsWith(needs.prepare.outputs.source-branch, 'release/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_BRANCH: ${{ needs.prepare.outputs.source-branch }}
+        run: |
+          BACKPORT="backport/$VERSION"
+          if [ -n "$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --head "$BACKPORT" --state open --json number --jq '.[0].number')" ]; then
+            echo "Backport PR already open — skipping."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin develop
+          git checkout -B "$BACKPORT" origin/develop
+          if ! git cherry-pick -m 1 "$GITHUB_SHA"; then
+            if [ -z "$(git status --porcelain)" ]; then
+              # Cherry-pick stopped because it produced an empty commit —
+              # develop already contains this change.
+              git cherry-pick --abort 2>/dev/null || true
+              echo "Nothing to backport — develop already contains this change."
+              exit 0
+            fi
+            echo "::error::Cherry-pick of $GITHUB_SHA onto develop hit conflicts. Backport manually: git checkout -b $BACKPORT origin/develop && git cherry-pick -m 1 $GITHUB_SHA — resolve, push, and open a PR to develop."
+            exit 1
+          fi
+          git push -u origin "$BACKPORT"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base develop \
+            --head "$BACKPORT" \
+            --title "Backport $VERSION to develop" \
+            --body "Automated follow-up to merging \`$SOURCE_BRANCH\` into \`main\` (v$VERSION): cherry-picks the fix onto \`develop\` (hotfix/support branches are cut from \`main\` or old tags, so their history is never merged into \`develop\` directly). Merge with a merge commit."
