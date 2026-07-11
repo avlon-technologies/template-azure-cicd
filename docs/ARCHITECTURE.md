@@ -29,15 +29,13 @@ graph TB
     end
     repo -->|OIDC deploy| azure
     subgraph Azure
-        gw[Application Gateway]
         appdev[App Service: dev]
         appstg[App Service: stg]
         appprod[App Service: prod<br/>blue/green slots]
-        gw --> appdev
-        gw --> appstg
-        gw --> appprod
     end
-    user([API consumer]) -->|HTTPS| gw
+    user([API consumer]) -->|HTTPS| appdev
+    user -->|HTTPS| appstg
+    user -->|HTTPS| appprod
 ```
 
 ## Cross-cutting principles
@@ -57,4 +55,4 @@ These hold at every level and are the "why" behind most decisions in the child d
 - [`operations-manual.md`](operations-manual.md) — the operator's runbook: how to build, release, deploy, roll back, and troubleshoot.
 - [`workload-identity-federation.md`](workload-identity-federation.md) — how CI authenticates to Azure without secrets.
 - `CLAUDE.md` (repo root) — orientation for AI/automated contributors.
-- The Azure runtime is provisioned by Terraform in a separate infrastructure repository (not part of this repo).
+- The Azure runtime is provisioned by Terraform in the platform repo `avlon-technologies/infrastructure` (module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/`) — not part of this repo.

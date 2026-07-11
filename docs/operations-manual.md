@@ -6,13 +6,11 @@ How to build, deploy, release, and verify this application across environments.
 
 ## Environments at a glance
 
-| Environment | App Service | Direct URL | Via shared gateway | Deployed by |
-|---|---|---|---|---|
-| dev | `dev-demo-helloworld-api` | https://dev-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>:8081/` | push to `develop` (automatic) |
-| stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>:8082/` | manual dispatch of a release, hotfix, or support pipeline |
-| prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>/` | merge PR to `main` (automatic, blue/green slot swap) |
-
-(`<gateway-ip>` is the shared Application Gateway's public IP, an output of the infrastructure deployment — one frontend port per environment.)
+| Environment | App Service | URL | Deployed by |
+|---|---|---|---|
+| dev | `app-cicd-demo-dev-cc` | https://app-cicd-demo-dev-cc.azurewebsites.net | push to `develop` (automatic) |
+| stg | `app-cicd-demo-stg-cc` | https://app-cicd-demo-stg-cc.azurewebsites.net | manual dispatch of a release, hotfix, or support pipeline |
+| prod | `app-cicd-demo-prod-cc` | https://app-cicd-demo-prod-cc.azurewebsites.net | merge PR to `main` (automatic, blue/green slot swap) |
 
 **Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*`, `hotfix/*`, or `support/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
@@ -152,8 +150,8 @@ gh pr merge --merge
 **Immediate rollback (previous build only):** The staging slot holds the previous production build after every swap. To roll back, swap again:
 
 ```
-az webapp deployment slot swap --resource-group prod-demo-helloworld-rg \
-  --name prod-demo-helloworld-api --slot staging --target-slot production
+az webapp deployment slot swap --resource-group rg-cicd-demo-prod-cc \
+  --name app-cicd-demo-prod-cc --slot staging --target-slot production
 ```
 
 This is near-instant (no rebuild, no redeploy).
@@ -226,11 +224,11 @@ These live in GitHub settings, not in the workflow files — if the repo is ever
 | Rulesets `develop` / `main` / `release` | Settings → Rules | PR required; **build / Build & Test** status check required; `main` allows merge commits only; `main` source branches must include `support/*` |
 | Workflow permissions | Settings → Actions → General | Default token: **read-only**; **Allow GitHub Actions to create and approve pull requests: on** (the back-merge and backport PRs need it) |
 | Repo variables | Settings → Secrets and variables → Actions | `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (used by `_deploy.yml`; not secrets) |
-| Environment variables | Settings → Environments → (each env) → Environment variables | `AZURE_CLIENT_ID`, `WEBAPP_NAME` per environment — `_deploy.yml` reads them via the job's `environment:` scope, so entry workflows carry no per-env config |
+| Environment variables | Settings → Environments → (each env) → Environment variables | `AZURE_CLIENT_ID`, `WEBAPP_NAME`, `RESOURCE_GROUP` per environment — `_deploy.yml` reads them via the job's `environment:` scope (`RESOURCE_GROUP` drives the slot-swap steps), so entry workflows carry no per-env config |
 | Environments | Settings → Environments | `dev`, `stg`, `prod` — each matched by a federated credential on its deploy identity |
 
 There are deliberately **no repository secrets** — Azure auth is OIDC workload identity federation (see `docs/workload-identity-federation.md`).
 
 ## Infrastructure changes
 
-All Azure resources (App Services, VNets, Key Vaults, App Gateway, deploy identities) are Terraform-managed in a separate infrastructure repository — change infrastructure there via plan/apply, never in the Azure Portal. This repo contains no IaC; the resources the pipeline requires are listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources).
+All Azure resources (App Service plans, App Services, the prod staging slot, deploy identities) are Terraform-managed in the platform infrastructure repository (`avlon-technologies/infrastructure` — module `infra/modules/cicd-demo/`, roots `infra/environments/cicd-demo/{dev,stg,prod}/`) — change infrastructure there via plan/apply, never in the Azure Portal. This repo contains no IaC; the resources the pipeline requires are listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources).
