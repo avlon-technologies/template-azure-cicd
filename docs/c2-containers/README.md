@@ -20,7 +20,6 @@ graph TB
         end
 
         subgraph runtime [Runtime plane «Azure»]
-            gateway[Application Gateway<br/>«shared»<br/>One frontend port per env]
             appdev[API — dev<br/>«App Service B1»]
             appstg[API — stg<br/>«App Service B1»]
             appprod[API — prod<br/>«App Service P0v3»<br/>production + staging slots]
@@ -34,10 +33,9 @@ graph TB
     ci -->|OIDC deploy| appdev
     ci -->|OIDC deploy| appstg
     ci -->|OIDC deploy → slot → swap| appprod
-    consumer -->|HTTPS| gateway
-    gateway --> appdev
-    gateway --> appstg
-    gateway --> appprod
+    consumer -->|HTTPS| appdev
+    consumer -->|HTTPS| appstg
+    consumer -->|HTTPS| appprod
 ```
 
 The system splits into two **planes**: a **delivery plane** (how code becomes a running deployment) and a **runtime plane** (what actually serves traffic). Most of the architecture's substance is in the delivery plane.
@@ -56,8 +54,7 @@ The system splits into two **planes**: a **delivery plane** (how code becomes a 
 
 | Container | Technology | Responsibility |
 |---|---|---|
-| **Application Gateway** | Azure App Gateway (shared) | Single internet entry point fronting all three environments, one frontend port each (prod :80, dev :8081, stg :8082). Its health probe targets `/healthz`. |
-| **API — dev / stg** | Azure App Service (B1 Linux) | Runs the published API. One App Service per environment, in its own resource group. |
+| **API — dev / stg** | Azure App Service (B1 Linux) | Runs the published API. One App Service per environment, in its own resource group, served directly at `https://app-cicd-demo-<env>-cc.azurewebsites.net`. |
 | **API — prod** | Azure App Service (P0v3, with slots) | Same API, but on a plan that supports deployment **slots** — a `staging` slot and a `production` slot — enabling blue/green deploys and instant rollback. |
 
 The **API application itself is a single container** — one self-hosted Kestrel process per App Service. Its internal structure is the subject of [C3](../c3-components/README.md).
@@ -66,32 +63,36 @@ The **API application itself is a single container** — one self-hosted Kestrel
 
 | From → To | Protocol | Notes |
 |---|---|---|
-| Consumer → Application Gateway | HTTPS/HTTP | Public traffic. |
-| Gateway → App Service | HTTP (over Azure VNet) | Per-environment backend; health-probed on `/healthz`. |
+| Consumer → App Service | HTTPS | Public traffic, directly to each environment's `https://app-cicd-demo-<env>-cc.azurewebsites.net`. |
 | Pipeline → App Service | Azure REST (via `azure/webapps-deploy`, `az`) | Authenticated by short-lived OIDC token, not a stored secret. |
 | Pipeline → Artifact Store | Actions artifact up/download (REST for cross-run) | Cross-run download (promotion) needs `actions: read`. |
 | Repository → Pipeline | GitHub event triggers | Push, PR, and `workflow_dispatch`. |
 
 ## Deployment topology per environment
 
-Each environment is a self-contained stamp: its own resource group `<env>-demo-helloworld-rg`, its own VNet, its own App Service `<env>-demo-helloworld-api`, its own Key Vault, and its own deploy identity (an App Registration scoped to *only* that resource group). The one shared resource is the Application Gateway, which multiplexes the three by frontend port.
+Each environment is a self-contained stamp: its own resource group `rg-cicd-demo-<env>-cc` containing an App Service plan `asp-cicd-demo-<env>-cc` (Linux; B1 for dev/stg, P0v3 for prod), an App Service `app-cicd-demo-<env>-cc` (.NET 10; prod additionally has a `staging` deployment slot — the blue/green swap target), and its own deploy identity (a user-assigned managed identity `mi-github-cicd-demo-<env>-cc` scoped to *only* that resource group). Nothing is shared between environments; each app is reached directly at its `azurewebsites.net` URL.
 
 ```mermaid
-graph LR
-    subgraph dev-rg [dev-demo-helloworld-rg]
-        d[App Service dev]
-        dkv[Key Vault]
+graph TB
+    gha[GitHub Actions]
+    users([API Consumers])
+    subgraph dev-rg [rg-cicd-demo-dev-cc]
+        dplan[Plan asp-cicd-demo-dev-cc<br/>B1 Linux]
+        d[App Service<br/>app-cicd-demo-dev-cc]
+        dmi[Managed identity<br/>mi-github-cicd-demo-dev-cc]
     end
-    subgraph stg-rg [stg-demo-helloworld-rg]
-        s[App Service stg]
-        skv[Key Vault]
+    subgraph stg-rg [rg-cicd-demo-stg-cc]
+        splan[Plan asp-cicd-demo-stg-cc<br/>B1 Linux]
+        s[App Service<br/>app-cicd-demo-stg-cc]
+        smi[Managed identity<br/>mi-github-cicd-demo-stg-cc]
     end
-    subgraph prod-rg [prod-demo-helloworld-rg]
-        p[App Service prod + slots]
-        pkv[Key Vault]
+    subgraph prod-rg [rg-cicd-demo-prod-cc]
+        pplan[Plan asp-cicd-demo-prod-cc<br/>P0v3 Linux]
+        p[App Service<br/>app-cicd-demo-prod-cc<br/>+ staging slot]
+        pmi[Managed identity<br/>mi-github-cicd-demo-prod-cc]
     end
-    agw[Shared Application Gateway<br/>:8081 dev · :8082 stg · :80 prod]
-    agw --> d & s & p
+    gha -->|OIDC deploy| d & s & p
+    users -->|HTTPS app-cicd-demo-env-cc.azurewebsites.net| d & s & p
 ```
 
 ## Key decisions at this level
@@ -99,4 +100,4 @@ graph LR
 - **Delivery plane and runtime plane are separate systems, federated by OIDC.** GitHub compute never holds an Azure credential; it presents a signed identity token that Azure's per-environment trust configuration accepts. Removes the single largest class of CI secrets.
 - **The artifact store is a first-class container, not an implementation detail.** Making the compiled binary a durable, addressable object (keyed by commit SHA, retained 90 days) is what lets prod promote the *exact* stg-tested bytes instead of rebuilding from source. Rebuilding would reintroduce the risk the whole verification chain exists to remove.
 - **Prod is the only environment with slots.** Blue/green is bought at the cost of a pricier plan (P0v3 vs B1). dev/stg roll back by re-running a workflow; prod rolls back by a near-instant slot swap. The cost is spent only where user-facing downtime matters.
-- **One shared gateway, isolated backends.** A single gateway keeps infra cost down and gives one public surface, while separate resource groups + scoped identities keep the environments' blast radius independent.
+- **No shared ingress, isolated stamps.** Each App Service is exposed directly at its `azurewebsites.net` URL — no gateway to operate or share — while separate resource groups + scoped identities keep the environments' blast radius independent.
