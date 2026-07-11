@@ -33,11 +33,11 @@ Branch → environment mapping:
 
 | Entry workflow | Trigger branches | Environment / App Service |
 |---|---|---|
-| `on-develop.yml` | `develop` | dev / `dev-demo-helloworld-api` |
-| `on-release.yml` | `release/**`, `milestone/**` | stg / `stg-demo-helloworld-api` |
-| `on-hotfix.yml` | `hotfix/**` | stg / `stg-demo-helloworld-api` |
-| `on-support.yml` | `support/**` | stg / `stg-demo-helloworld-api` |
-| `on-main.yml` | `main` | prod / `prod-demo-helloworld-api` |
+| `on-develop.yml` | `develop` | dev / `app-cicd-demo-dev-cc` |
+| `on-release.yml` | `release/**`, `milestone/**` | stg / `app-cicd-demo-stg-cc` |
+| `on-hotfix.yml` | `hotfix/**` | stg / `app-cicd-demo-stg-cc` |
+| `on-support.yml` | `support/**` | stg / `app-cicd-demo-stg-cc` |
+| `on-main.yml` | `main` | prod / `app-cicd-demo-prod-cc` |
 
 Release specifics (`on-release.yml`): pushes only build (deploy is gated on `workflow_dispatch`). A `prepare` job resolves the version — manual dispatch takes the `version` input; otherwise `release/X.Y.Z` becomes `X.Y.Z-build.<run_number>` and `milestone/<name>` becomes `ms-<name>.<run_number>`. Dispatched rc builds upload commit-keyed artifacts (`webapp-<sha>`, 90-day retention); when the release merges to main, `on-main.yml` **promotes** that exact artifact (build job skipped) — a missing/expired artifact, or a release head with no `build/stg/*` tag (built but never green on staging), **fails the prod run** (no silent rebuild of untested source; re-dispatch the release pipeline to stage a fresh candidate, verify staging, then re-run). Re-dispatching on the same branch skips the build by looking up the existing `webapp-<sha>` artifact and verifying its label marker: same label (or an empty version input, which adopts the existing label) reuses the artifact; a *different* label for the same commit fails fast (the stamp is compiled in — re-labeling would deploy a binary that reports the wrong version). The first dispatch always builds (the push artifact is named `webapp-publish` and has the wrong version stamp). Version inputs are charset-restricted (letters/digits/`.`/`-`) because labels become artifact names and git tags.
 
@@ -49,8 +49,8 @@ Hotfix/support specifics (`on-hotfix.yml`, `on-support.yml`): same dispatch-gate
 
 ## Infrastructure
 
-Lives in a separate repo: `../cicd-infrastructure` (see its README). Terraform provisions, per environment (`dev` | `stg` | `prod`), a resource group `<env>-demo-helloworld-rg` with its own VNet, an App Service `<env>-demo-helloworld-api` (B1 plan; P0v3 with slots for prod) (the names the deploy workflows target), and a Key Vault — plus one shared Application Gateway exposing all environments (one frontend port per env: prod :80, dev :8081, stg :8082).
+Lives in the platform Terraform repo: `../infrastructure` (`avlon-technologies/infrastructure`) — module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/` (hosted there rather than here per its ADR-0002; naming and layout follow `../engineering-standards`). Per environment it provisions a resource group `rg-cicd-demo-<env>-cc` containing a Linux App Service plan `asp-cicd-demo-<env>-cc` (B1 for dev/stg; P0v3 for prod), the App Service `app-cicd-demo-<env>-cc` (.NET 10 — the name the deploy workflows target via `WEBAPP_NAME`), a `staging` slot in prod only (the blue/green swap target), and the deploy identity below. Apps are served directly on `*.azurewebsites.net` — there is no VNet/Application Gateway layer. Remote state: `sttfstatesharedcc` / `tfstate-<env>` / `cicd-demo.tfstate`.
 
 ## Deploy identity
 
-CI deploys log into Azure via OIDC using one App Registration per environment (`demo-helloworld-github-deploy-<env>`), each with a federated credential for its GitHub environment and Website Contributor scoped to its own resource group only. Client IDs live in each GitHub environment's `AZURE_CLIENT_ID` variable (read by `_deploy.yml`). Deploys fail until the Terraform in `../cicd-infrastructure` has been applied for the target environment (the App Service must exist).
+CI deploys log into Azure via OIDC using one user-assigned managed identity per environment (`mi-github-cicd-demo-<env>-cc`, in the workload's own resource group), each with a federated credential for its GitHub environment (`repo:avlon-technologies/template-azure-cicd:environment:<env>`) and Website Contributor scoped to its own resource group only. Client IDs live in each GitHub environment's `AZURE_CLIENT_ID` variable (read by `_deploy.yml`): dev `66b2a296-…`, stg `964871d3-…`, prod `a7cf94d6-…`. Deploys fail until the Terraform in `../infrastructure` has been applied for the target environment (the App Service must exist).
