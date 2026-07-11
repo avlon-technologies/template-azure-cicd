@@ -5,8 +5,10 @@ on:
     inputs:
       version:
         description: >
-          Optional version override for release branches (e.g. 1.1.0-rc.5).
-          Defaults to YYYYMMDD.run_number when omitted (develop, hotfix).
+          Build label to stamp into InformationalVersion. Release, milestone,
+          hotfix, and support callers pass their commit-derived label here.
+          Defaults to YYYYMMDD.run_number when omitted (develop builds and
+          the version-less main rebuild escape hatch).
         type: string
         required: false
         default: ''

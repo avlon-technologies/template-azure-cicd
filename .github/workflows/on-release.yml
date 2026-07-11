@@ -5,12 +5,10 @@ on:
     branches:
       - release/**
       - milestone/**
+  # No inputs: the build label is a pure function of the commit (branch name
+  # + commit height), so there is nothing for the operator to choose — a
+  # dispatch means "deploy this branch's HEAD to stg".
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version label (e.g. 1.1.0-rc.1). Leave empty to reuse the label this commit was already built with, or auto-generate one.'
-        required: false
-        type: string
 
 # Dispatches deploy to stg — serialize them with the other stg pipelines
 # (hotfix/support share the group). Pushes only build, so they queue per
@@ -25,19 +23,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # When an existing artifact is reused, its stamped label (from the
-      # promote step) wins over the resolved input/auto label.
+      # promote step) wins over the freshly derived one — the binary is the
+      # source of truth for what it reports.
       version: ${{ steps.promote.outputs.version || steps.version.outputs.value }}
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
     steps:
-      - name: Resolve and validate version
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history: the label embeds the commit height
+          # (git rev-list --count), which a shallow clone would report as 1.
+          fetch-depth: 0
+
+      - name: Derive version from the commit
         id: version
-        # Inputs pass via env, never interpolated into the script.
+        # The label is deterministic — branch name + commit height — so every
+        # build of the same commit produces the same label, and the push
+        # build's artifact is reusable when the deploy is dispatched later.
         env:
-          INPUT_VERSION: ${{ inputs.version }}
           REF: ${{ github.ref_name }}
-          RUN_NUMBER: ${{ github.run_number }}
-          EVENT: ${{ github.event_name }}
         run: |
           # The dispatch form's branch selector defaults to the repo's default
           # branch (develop) — reject anything that isn't actually a release
@@ -54,47 +58,41 @@ jobs:
             exit 1
           fi
 
-          if [ -n "$INPUT_VERSION" ]; then
-            # Dispatched: the label must belong to the release branch it runs
-            # from, so staging can't be stamped/tagged with a foreign version.
-            if [[ "$INPUT_VERSION" != "$BRANCH_VERSION" && "$INPUT_VERSION" != "$BRANCH_VERSION"-* ]]; then
-              echo "::error::Version label '$INPUT_VERSION' does not match branch '$REF' (expected '$BRANCH_VERSION' or '$BRANCH_VERSION-<pre-release>', e.g. '$BRANCH_VERSION-rc.1')."
-              exit 1
-            fi
-            VALUE="$INPUT_VERSION"
-          elif [ "$BRANCH_KIND" = release ]; then
-            VALUE="$BRANCH_VERSION-build.$RUN_NUMBER"
+          HEIGHT=$(git rev-list --count HEAD)
+          if [ "$BRANCH_KIND" = release ]; then
+            VALUE="$BRANCH_VERSION-build.$HEIGHT"
           else
-            VALUE="ms-$BRANCH_VERSION.$RUN_NUMBER"
+            VALUE="ms-$BRANCH_VERSION.$HEIGHT"
           fi
-          # Dispatch labels become artifact/marker names and git tags —
-          # restrict to a safe charset. Checked on the RESOLVED value, not
-          # just the input: the auto-generated label inherits the branch
-          # name, which can carry characters artifact names reject.
-          if [ "$EVENT" = "workflow_dispatch" ] && [[ ! "$VALUE" =~ ^[0-9A-Za-z.-]+$ ]]; then
-            echo "::error::Label '$VALUE' contains unsupported characters (allowed: letters, digits, '.', '-'). Supply a valid version input, or rename the branch."
+          # Labels become artifact/marker names and git tags — restrict to a
+          # safe charset. The auto-generated label inherits the branch name,
+          # which can carry characters artifact names reject; checked on
+          # every event because push builds now upload marker artifacts too.
+          if [[ ! "$VALUE" =~ ^[0-9A-Za-z.-]+$ ]]; then
+            echo "::error::Label '$VALUE' contains unsupported characters (allowed: letters, digits, '.', '-'). Rename the branch."
             exit 1
           fi
           echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Locate existing rc artifact
         id: promote
-        # On repeated dispatches, reuse the artifact already built for this
-        # commit rather than rebuilding. The version stamp is compiled into
-        # the binary at build time, so reuse is only valid for the label it
-        # was built with — a mismatched label fails HERE, before anything
-        # deploys, instead of at the post-deploy smoke test. An empty version
-        # input adopts the existing label (intuitive redeploy: just hit Run).
+        # Reuse the artifact the push build already produced for this commit
+        # rather than rebuilding: labels are commit-derived, so the push
+        # build was stamped with the same label this dispatch resolved. If
+        # the marker disagrees (the derivation changed between push and
+        # dispatch), the existing stamp wins — the version is compiled into
+        # the binary, and re-labeling would ship an app that reports the
+        # wrong version.
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_VERSION: ${{ inputs.version }}
+          DERIVED: ${{ steps.version.outputs.value }}
         run: |
           NAME="webapp-$GITHUB_SHA"
           RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
           if [ -z "$RUN_ID" ]; then
-            echo "No existing artifact for $GITHUB_SHA — will build."
+            echo "No existing artifact for $GITHUB_SHA (push build expired or predates this commit) — will build."
             exit 0
           fi
           # The build uploads a marker artifact whose name carries the label
@@ -103,12 +101,11 @@ jobs:
             --jq ".artifacts[].name | select(startswith(\"$NAME.label.\"))" | head -1)
           EXISTING_LABEL="${EXISTING_LABEL#"$NAME.label."}"
           if [ -z "$EXISTING_LABEL" ]; then
-            echo "Artifact $NAME exists but carries no label marker (built before markers were introduced) — rebuilding with the requested label."
+            echo "Artifact $NAME exists but carries no label marker (built before markers were introduced) — rebuilding."
             exit 0
           fi
-          if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$EXISTING_LABEL" ]; then
-            echo "::error::This commit was already built and stamped as '$EXISTING_LABEL' — deploying that binary as '$INPUT_VERSION' would ship an app that reports the wrong version. Re-dispatch with '$EXISTING_LABEL' (or leave the version empty to reuse it), or push a new commit to build '$INPUT_VERSION'."
-            exit 1
+          if [ "$EXISTING_LABEL" != "$DERIVED" ]; then
+            echo "::notice::Existing artifact is stamped '$EXISTING_LABEL' (derived '$DERIVED' — label derivation changed since the push build). Deploying the binary as what it actually reports."
           fi
           echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL') from run $RUN_ID — build will be skipped."
           echo "artifact=$NAME" >> $GITHUB_OUTPUT
@@ -125,10 +122,11 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-      # Dispatched rc builds are promotable: commit-keyed name, 90-day
-      # retention, so the prod deploy can ship this exact artifact.
-      artifact-name: ${{ github.event_name == 'workflow_dispatch' && format('webapp-{0}', github.sha) || 'webapp-publish' }}
-      retention-days: ${{ github.event_name == 'workflow_dispatch' && 90 || 1 }}
+      # Every build on a release/milestone branch is promotable: labels are
+      # commit-derived, so the push build already carries the label a later
+      # dispatch will resolve. Commit-keyed name, 90-day retention.
+      artifact-name: webapp-${{ github.sha }}
+      retention-days: 90
 
   deploy:
     # Only deploy when the release coordinator manually dispatches — not on every push.
