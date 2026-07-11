@@ -16,7 +16,7 @@ How to build, deploy, release, and verify this application across environments.
 
 **Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*`, `hotfix/*`, or `support/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
-Every deploy, in every environment, ends with an automatic **smoke test**: `GET /v1/hello` must return `Hello World!` **and** `/openapi/v1.json` must report the build label being deployed (or a pre-release of it — promoted binaries keep their rc stamp). A deploy that leaves the app broken *or serving the wrong build* fails the pipeline instead of reporting success.
+Every deploy, in every environment, ends with an automatic **smoke test**: `GET /v1/hello` must return `Hello World!` **and** `/openapi/v1.json` must report the build label being deployed (or a pre-release of it — promoted binaries keep their candidate stamp). A deploy that leaves the app broken *or serving the wrong build* fails the pipeline instead of reporting success.
 
 ## Deploy to dev (automatic)
 
@@ -40,7 +40,7 @@ gh workflow run on-develop.yml --ref develop -f build-label=20260703.32
 
 ## Cut a release
 
-Once the state of `develop` is ready to become a release, create and push a release branch named after the bare version (no `v`, no rc suffix — see naming rationale below):
+Once the state of `develop` is ready to become a release, create and push a release branch named after the bare version (no `v`, no candidate suffix — see naming rationale below):
 
 ```
 git checkout develop && git pull

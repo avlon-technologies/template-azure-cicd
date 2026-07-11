@@ -33,7 +33,10 @@ jobs:
         with:
           # Full history: the label embeds the commit height
           # (git rev-list --count), which a shallow clone would report as 1.
+          # Treeless partial clone keeps this cheap as history grows — the
+          # count needs commit objects only, no trees or blobs.
           fetch-depth: 0
+          filter: tree:0
 
       - name: Derive version from the commit
         id: version
@@ -105,7 +108,8 @@ jobs:
             exit 0
           fi
           if [ "$EXISTING_LABEL" != "$DERIVED" ]; then
-            echo "::notice::Existing artifact is stamped '$EXISTING_LABEL' (derived '$DERIVED' — label derivation changed since the push build). Deploying the binary as what it actually reports."
+            echo "::warning::Existing artifact is stamped '$EXISTING_LABEL' (derived '$DERIVED' — label derivation changed since the push build). Deploying the binary as what it actually reports."
+            echo "⚠️ **Label drift:** existing artifact is stamped \`$EXISTING_LABEL\` but the current derivation yields \`$DERIVED\`. Deploying under the stamped label — push a new commit to adopt the new derivation." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL') from run $RUN_ID — build will be skipped."
           echo "artifact=$NAME" >> $GITHUB_OUTPUT

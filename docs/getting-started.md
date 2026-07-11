@@ -151,10 +151,10 @@ git checkout -b release/0.1.0
 git push -u origin release/0.1.0
 
 # Dispatch a release candidate to staging
-gh workflow run on-release.yml --ref release/0.1.0 -f version=0.1.0-rc.1
+gh workflow run on-release.yml --ref release/0.1.0
 ```
 
-The dispatch builds a promotable artifact, deploys it to stg, smoke-tests it, and tags the commit `build/stg/0.1.0-rc.1`. Then promote:
+The dispatch reuses the artifact the push already built (or rebuilds if it expired), deploys it to stg, smoke-tests it, and tags the commit `build/stg/0.1.0-build.<height>` (the label is derived from the commit — see the operations manual). Then promote:
 
 ```sh
 gh pr create --base main --head release/0.1.0 --title "Release 0.1.0"
