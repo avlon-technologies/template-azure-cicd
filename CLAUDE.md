@@ -53,4 +53,4 @@ Lives in a separate repo: `../cicd-infrastructure` (see its README). Terraform p
 
 ## Deploy identity
 
-CI deploys log into Azure via OIDC using one App Registration per environment (`demo-helloworld-github-deploy-<env>`), each with a federated credential for its GitHub environment and Website Contributor scoped to its own resource group only. Client IDs live in each GitHub environment's `AZURE_CLIENT_ID` variable (read by `_deploy.yml`): dev `f87452ba-…`, stg `e205fdd4-…`, prod `279d0dec-…`. Deploys fail until the Terraform in `../cicd-infrastructure` has been applied for the target environment (the App Service must exist).
+CI deploys log into Azure via OIDC using one App Registration per environment (`demo-helloworld-github-deploy-<env>`), each with a federated credential for its GitHub environment and Website Contributor scoped to its own resource group only. Client IDs live in each GitHub environment's `AZURE_CLIENT_ID` variable (read by `_deploy.yml`). Deploys fail until the Terraform in `../cicd-infrastructure` has been applied for the target environment (the App Service must exist).

@@ -52,7 +52,9 @@ These hold at every level and are the "why" behind most decisions in the child d
 
 ## Related documents
 
+- [`getting-started.md`](getting-started.md) — first-time setup: Azure resources, deploy identities, GitHub configuration.
+- [`customization.md`](customization.md) — adapting the template to your own project.
 - [`operations-manual.md`](operations-manual.md) — the operator's runbook: how to build, release, deploy, roll back, and troubleshoot.
 - [`workload-identity-federation.md`](workload-identity-federation.md) — how CI authenticates to Azure without secrets.
 - `CLAUDE.md` (repo root) — orientation for AI/automated contributors.
-- `../cicd-infrastructure` — the Terraform that provisions the Azure runtime.
+- The Azure runtime is provisioned by Terraform in a separate infrastructure repository (not part of this repo).
