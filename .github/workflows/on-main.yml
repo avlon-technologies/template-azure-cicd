@@ -121,7 +121,7 @@ jobs:
             echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
             echo "sha=$RELEASE_SHA" >> $GITHUB_OUTPUT
           else
-            echo "::error::No unexpired stg-tested artifact for $RELEASE_SHA — no rc was dispatched for v$VERSION, or it passed the 90-day retention window. Dispatch the release/hotfix/support pipeline on the source branch (e.g. gh workflow run on-release.yml --ref release/$VERSION -f version=$VERSION-rc.1), verify staging, then re-run this workflow."
+            echo "::error::No unexpired stg-tested artifact for $RELEASE_SHA — the candidate was never dispatched to stg for v$VERSION, or it passed the 90-day retention window. Dispatch the release/hotfix/support pipeline on the source branch (e.g. gh workflow run on-release.yml --ref release/$VERSION), verify staging, then re-run this workflow."
             exit 1
           fi
 

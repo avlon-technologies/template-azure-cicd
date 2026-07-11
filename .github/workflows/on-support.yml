@@ -4,12 +4,9 @@ on:
   push:
     branches:
       - support/**
+  # No inputs: the build label is a pure function of the commit (branch name
+  # + commit height) — a dispatch means "deploy this branch's HEAD to stg".
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version label (e.g. 1.4.1-rc.1). Leave empty to reuse the label this commit was already built with, or auto-generate one.'
-        required: false
-        type: string
 
 # Dispatches deploy to stg — serialize them with the other stg pipelines
 # (release/hotfix share the group). Pushes only build, so they queue per
@@ -34,8 +31,6 @@ jobs:
     uses: ./.github/workflows/_hotfix-support.yml
     with:
       branch-type: support
-      version: ${{ inputs.version || '' }}
       event-name: ${{ github.event_name }}
       ref-name: ${{ github.ref_name }}
       sha: ${{ github.sha }}
-      run-number: ${{ github.run_number }}

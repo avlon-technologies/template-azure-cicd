@@ -6,17 +6,15 @@ How to build, deploy, release, and verify this application across environments.
 
 ## Environments at a glance
 
-| Environment | App Service | Direct URL | Via shared gateway | Deployed by |
-|---|---|---|---|---|
-| dev | `dev-demo-helloworld-api` | https://dev-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>:8081/` | push to `develop` (automatic) |
-| stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>:8082/` | manual dispatch of a release, hotfix, or support pipeline |
-| prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>/` | merge PR to `main` (automatic, blue/green slot swap) |
-
-(`<gateway-ip>` is the shared Application Gateway's public IP, an output of the infrastructure deployment — one frontend port per environment.)
+| Environment | App Service | URL | Deployed by |
+|---|---|---|---|
+| dev | `app-cicd-demo-dev-cc` | https://app-cicd-demo-dev-cc.azurewebsites.net | push to `develop` (automatic) |
+| stg | `app-cicd-demo-stg-cc` | https://app-cicd-demo-stg-cc.azurewebsites.net | manual dispatch of a release, hotfix, or support pipeline |
+| prod | `app-cicd-demo-prod-cc` | https://app-cicd-demo-prod-cc.azurewebsites.net | merge PR to `main` (automatic, blue/green slot swap) |
 
 **Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*`, `hotfix/*`, or `support/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
-Every deploy, in every environment, ends with an automatic **smoke test**: `GET /v1/hello` must return `Hello World!` **and** `/openapi/v1.json` must report the build label being deployed (or a pre-release of it — promoted binaries keep their rc stamp). A deploy that leaves the app broken *or serving the wrong build* fails the pipeline instead of reporting success.
+Every deploy, in every environment, ends with an automatic **smoke test**: `GET /v1/hello` must return `Hello World!` **and** `/openapi/v1.json` must report the build label being deployed (or a pre-release of it — promoted binaries keep their candidate stamp). A deploy that leaves the app broken *or serving the wrong build* fails the pipeline instead of reporting success.
 
 ## Deploy to dev (automatic)
 
@@ -40,7 +38,7 @@ gh workflow run on-develop.yml --ref develop -f build-label=20260703.32
 
 ## Cut a release
 
-Once the state of `develop` is ready to become a release, create and push a release branch named after the bare version (no `v`, no rc suffix — see naming rationale below):
+Once the state of `develop` is ready to become a release, create and push a release branch named after the bare version (no `v`, no candidate suffix — see naming rationale below):
 
 ```
 git checkout develop && git pull
@@ -48,29 +46,28 @@ git checkout -b release/1.1.0
 git push -u origin release/1.1.0
 ```
 
-Every push to `release/**` triggers **CI/CD — Release → STG** in build-only mode: it builds and tests with the auto-label `1.1.0-build.<run_number>` but does **not** deploy. Land stabilization fixes directly on this branch.
+Every push to `release/**` triggers **CI/CD — Release → STG** in build-only mode: it builds and tests but does **not** deploy. Land stabilization fixes directly on this branch.
+
+**Candidate labels are derived from the commit, not chosen.** The label is a pure function of the branch name and the commit height (`git rev-list --count HEAD`): the tip of `release/1.1.0` at height 187 builds `1.1.0-build.187`, and every stabilization fix advances the height, minting the next candidate automatically. There is no version input anywhere in the flow. Because the same commit always derives the same label, the push build's artifact is already the candidate — it is uploaded commit-keyed (`webapp-<sha>`, 90-day retention) with a marker recording its label.
+
+> **Storage/exposure tradeoff (deliberate):** every push to a release-family branch now retains its artifact for 90 days, not just dispatched candidates. At this API's artifact size (~1.2 MB) a busy quarter retains tens of MB — free on public repos, roughly a cent per month on private ones — in exchange for never rebuilding a commit that CI already built and for a 90-day prod-rollback window. Artifacts are downloadable by anyone with repo read access, the same audience that can read the source and build the identical binary — which stays harmless **only while builds embed no secrets** (configuration belongs in App Service settings at deploy time, never in the build). If a repo built from this template has much larger artifacts, dial `retention-days` down on push builds — expiry is graceful (a dispatch of the same commit rebuilds the identical label) but shortens the rollback window, which is bounded by the *merged* release's artifact retention.
 
 ## Deploy a release candidate to staging
 
-Deploys to stg are gated on a human trigger (manual dispatch). Give each candidate an rc label: `1.1.0-rc.1`, then `-rc.2` as fixes land.
+Deploys to stg are gated on a human trigger (manual dispatch). Dispatching means exactly "deploy this branch's HEAD to stg" — nothing to type.
 
 **From the UI:**
 1. **Actions** tab → **CI/CD — Release → STG** (left sidebar)
 2. Click **Run workflow**
 3. **Use workflow from:** select the release branch (e.g. `release/1.1.0`) — easy to miss; it defaults to the repository's default branch (`develop`), and the pipeline fails fast if the selected branch isn't a `release/*` or `milestone/*` branch
-4. **version:** enter the candidate label, e.g. `1.1.0-rc.1`
-5. Click **Run workflow**
+4. Click **Run workflow**
 
 **From the command line:**
 ```
-gh workflow run on-release.yml --ref release/1.1.0 -f version=1.1.0-rc.1
+gh workflow run on-release.yml --ref release/1.1.0
 ```
 
-The run deploys to stg and tags the commit `build/stg/1.1.0-rc.1` — the audit trail of exactly what QA tested.
-
-The version label must match the release branch: dispatching from `release/1.1.0` accepts `1.1.0` or `1.1.0-<pre-release>` (e.g. `1.1.0-rc.1`) and **fails fast** on anything else (e.g. `1.2.0-rc.1`), so staging can't be stamped or tagged with a version that doesn't belong to the branch.
-
-Re-dispatching the same label on the same branch (e.g. to pick up a config change or retry a flaky deploy) skips the build and redeploys the existing artifact — the binary that reaches stg is byte-identical to the one from the first dispatch. Leaving the **version** input empty on a re-dispatch does the same thing: the pipeline adopts the label the existing artifact was stamped with, so "just hit Run again" is always safe. Dispatching a *different* label for the same commit **fails fast** before anything deploys — the version is compiled into the binary at build time, so a new label requires a new commit (rc numbers advance with fixes, never in place). Note that the **first** dispatch always builds: the push-triggered artifact (`webapp-publish`) has a date-based auto-label and is not reusable. Only once a dispatch has produced a commit-keyed `webapp-<sha>` artifact will subsequent dispatches skip the build.
+The dispatch **reuses the artifact the push already built** — the build job is skipped, and the binary that reaches stg is byte-identical to the one CI tested on push. The run deploys to stg and tags the commit `build/stg/1.1.0-build.187` — the audit trail of exactly what QA tested. Re-dispatching on the same commit redeploys the same artifact; a rebuild happens only if the artifact expired (90 days) or the push predates the marker scheme. A new candidate requires a new commit — push the fix, the height advances, dispatch again.
 
 ## Deploy to production
 
@@ -84,12 +81,12 @@ gh pr merge --merge        # merge commit — do NOT squash (see note)
 Merging triggers **CI/CD — Main → PROD**, which automatically:
 
 1. Extracts `1.1.0` from the merge commit subject
-2. **Promotes the stg-tested artifact** (build-once-promote-many): rc dispatches store their build keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. "Stg-tested" is verified, not assumed: promotion requires a `build/stg/*` tag on the release head, which only a stg deploy that passed its smoke test creates. If no rc was ever dispatched, the artifact expired, or the candidate never went green on staging, the run **fails** rather than silently rebuilding or shipping untested source — dispatch the release pipeline to stage a candidate, verify staging, then re-run
+2. **Promotes the stg-tested artifact** (build-once-promote-many): release-branch builds are stored keyed by commit SHA with 90-day retention; the prod pipeline finds the artifact for the merged release head and ships *that exact binary* — the build job is skipped. "Stg-tested" is verified, not assumed: promotion requires a `build/stg/*` tag on the release head, which only a stg deploy that passed its smoke test creates. If the candidate was never dispatched to stg, the artifact expired, or it never went green on staging, the run **fails** rather than silently rebuilding or shipping untested source — dispatch the release pipeline to stage the candidate, verify staging, then re-run
 3. Deploys **blue/green**: the artifact goes to the `staging` slot first, is smoke-tested there, and only then swapped into production — a bad build never reaches users, and the previous build stays in the slot for instant rollback (swap back)
 4. Smoke-tests production after the swap — if that fails, the previous build is **automatically swapped back** — and tags the release-branch commit the artifact was built from as `build/prod/1.1.0`
 5. Creates GitHub Release **v1.1.0** with generated notes
 
-> **Promoted artifacts keep their rc stamp.** Because the promoted binary is byte-identical to what QA tested, prod's Swagger shows the rc label it was built with (e.g. `1.1.0-rc.3`) — that's a feature: it tells you exactly which candidate was promoted. The git tag (`build/prod/1.1.0`) and GitHub Release (`v1.1.0`) carry the release version.
+> **Promoted artifacts keep their candidate stamp.** Because the promoted binary is byte-identical to what QA tested, prod's Swagger shows the label it was built with (e.g. `1.1.0-build.187`) — that's a feature: it tells you exactly which candidate was promoted. The git tag (`build/prod/1.1.0`) and GitHub Release (`v1.1.0`) carry the release version.
 
 > **Always use a merge commit for release PRs, with the default message.** The version is read from the merge commit subject ("Merge pull request #N from …/release/1.1.0"). A push whose subject doesn't name a `release/*`, `hotfix/*`, or `support/*` branch — a squash merge, or a merge message customized at merge time — **fails the prod run outright**: the stg-tested artifact can't be located without a version, and the pipeline refuses to rebuild untested source for prod. (Redeploying `main` without a version remains available as an explicit escape hatch via manual dispatch.) Squash also breaks the back-merge below.
 
@@ -115,18 +112,18 @@ git checkout -b hotfix/1.1.1
 git push -u origin hotfix/1.1.1
 ```
 
-Pushes build and test only — no automatic stg deploy. When ready to verify on stg, dispatch manually:
+Pushes build and test with the commit-derived label (`1.1.1-hotfix.<height>`) and store the promotable artifact — no automatic stg deploy. When ready to verify on stg, dispatch manually (no inputs; the dispatch reuses the push build's artifact and skips the rebuild):
 
-**From the UI:** Actions → **CI/CD — Hotfix → STG** → Run workflow → select the hotfix branch (the **Use workflow from** selector defaults to `develop` — same trap as the release dispatch; the pipeline fails fast if the branch isn't `hotfix/*`) → enter the version label (e.g. `1.1.1` or `1.1.1-rc.1`)
+**From the UI:** Actions → **CI/CD — Hotfix → STG** → Run workflow → select the hotfix branch (the **Use workflow from** selector defaults to `develop` — same trap as the release dispatch; the pipeline fails fast if the branch isn't `hotfix/*`)
 
 **From the command line:**
 ```
-gh workflow run on-hotfix.yml --ref hotfix/1.1.1 -f version=1.1.1-rc.1
+gh workflow run on-hotfix.yml --ref hotfix/1.1.1
 ```
 
 When verified, PR `hotfix/1.1.1 → main` (merge commit). Merging triggers **CI/CD — Main → PROD**, which auto-detects `1.1.1` from the merge commit subject, promotes the stg-tested artifact, creates GitHub Release `v1.1.1`, and raises a **cherry-pick backport PR** to `develop`: because hotfix branches are cut from `main` (not `develop`), their history is never merged into `develop` directly — the `backmerge` job cherry-picks the merge commit's diff (`-m 1`) onto a `backport/1.1.1` branch and opens the PR from that. If the cherry-pick hits conflicts, the job fails with the exact manual commands to run; if `develop` already contains the change, it skips gracefully.
 
-The version label must match the hotfix branch: `1.1.1` or `1.1.1-<pre-release>`. Re-dispatching the same label (or an empty version) skips the rebuild and redeploys the existing artifact; a *different* label for the same commit fails fast (same rules as the release flow).
+Re-dispatching on the same commit redeploys the same artifact; a new candidate label requires a new commit (the height advances with each fix) — same rules as the release flow.
 
 ## Maintain a support branch
 
@@ -141,7 +138,7 @@ The workflow (`on-support.yml`) behaves identically to the hotfix flow: pushes b
 
 **From the command line:**
 ```
-gh workflow run on-support.yml --ref support/1.4.1 -f version=1.4.1-rc.1
+gh workflow run on-support.yml --ref support/1.4.1
 gh pr create --base main --head support/1.4.1 --title "Support 1.4.1"
 gh pr merge --merge
 ```
@@ -153,8 +150,8 @@ gh pr merge --merge
 **Immediate rollback (previous build only):** The staging slot holds the previous production build after every swap. To roll back, swap again:
 
 ```
-az webapp deployment slot swap --resource-group prod-demo-helloworld-rg \
-  --name prod-demo-helloworld-api --slot staging --target-slot production
+az webapp deployment slot swap --resource-group rg-cicd-demo-prod-cc \
+  --name app-cicd-demo-prod-cc --slot staging --target-slot production
 ```
 
 This is near-instant (no rebuild, no redeploy).
@@ -187,10 +184,10 @@ The artifact must be within its 90-day retention window. If it has expired, the 
 | Release branch | bare version | `release/1.1.0` |
 | Hotfix branch | bare patch version | `hotfix/1.1.1` |
 | Support branch | bare patch version | `support/1.1.1` |
-| Candidate label (dispatch input / stg tag) | SemVer pre-release | `1.1.0-rc.2` |
+| Candidate label (commit-derived; appears in stg tags and Swagger) | branch version + kind + commit height | `1.1.0-build.187`, `1.1.1-hotfix.42` |
 | Release / hotfix / support tag (automatic on prod deploy) | `v` + version | `v1.1.0` |
 
-The rc number identifies a *candidate build*; the branch identifies the *line of development* — so rc numbers never appear in branch names.
+The candidate label identifies a *build of one commit* — it is derived (`git rev-list --count HEAD`), never typed, so the same commit always carries the same label and each new commit mints the next candidate. The branch identifies the *line of development*; candidate suffixes never appear in branch names.
 
 ## Troubleshooting
 
@@ -204,19 +201,19 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | PR can't merge: "required status check missing" | Wait for the **build / Build & Test** check from `on-pr.yml` to pass; if it never appears, the PR predates the check — push any commit to re-trigger |
 | Prod deploy failed at "Smoke test staging slot" | The new build is unhealthy — **production was not touched** (swap never happened). Fix and redeploy; nothing to roll back |
 | Prod deploy failed at "Smoke test deployment" (after the swap) | The swap went through but prod stopped answering — the pipeline **automatically swapped the previous build back**; production is running the prior version. Investigate the bad build before redeploying |
-| Release merged but prod deploy fails: "No unexpired stg-tested artifact" | No rc was ever dispatched to stg for the merged release head (or the artifact expired). Dispatch the release pipeline on the source branch to build and stage-test one, then re-run the failed prod run — it will find and promote the fresh artifact |
-| Release merged but prod deploy fails: "No build/stg/* tag points at …" | The rc artifact was built, but its stg deploy never went green (smoke test failed, deploy errored, or the dispatch was cancelled). Re-dispatch the release pipeline on the source branch, let the stg deploy pass, then re-run the prod run |
+| Release merged but prod deploy fails: "No unexpired stg-tested artifact" | The candidate was never dispatched to stg (or its artifact expired). Dispatch the release pipeline on the source branch, verify staging, then re-run the failed prod run — it will find and promote the artifact |
+| Release merged but prod deploy fails: "No build/stg/* tag points at …" | The candidate was built, but its stg deploy never went green (smoke test failed, deploy errored, or the dispatch was cancelled). Re-dispatch the release pipeline on the source branch, let the stg deploy pass, then re-run the prod run |
 | Smoke test fails: "reports version 'X', expected 'Y'" | The app answers but is running the wrong build — the deploy or swap didn't take effect, or the wrong artifact shipped. Check which run last deployed to that environment; redeploy the intended label |
-| Deploy fails at "Tag deployment": "Deployment tags are immutable" | The `build/<env>/<label>` tag already points at different code — a label was reused for a different commit (e.g. an rc label re-dispatched after new commits landed). Use a new label |
+| Deploy fails at "Tag deployment": "Deployment tags are immutable" | The `build/<env>/<label>` tag already points at different code — two different commits derived the same label (e.g. a release branch re-cut at the same commit height). Push another commit to advance the height, or delete the stale tag if its run is confirmed dead |
 | Deploy failed at "Smoke test deployment" (dev/stg) | The build deployed but isn't answering — check App Service logs; the previous build is gone, so fix forward or re-run the last good workflow run |
 | Deploy run sits in "Queued" | Concurrency groups serialize deploys per environment (`deploy-dev`, `deploy-stg`, `deploy-prod`) — the run starts when the in-flight deploy to that environment finishes |
 | A job after a *skipped* job never runs | GitHub implicitly wraps `if` conditions in `success()`, which is false when **any ancestor job was skipped** — and the promotion path skips `build` by design. Downstream jobs must use `!failure() && !cancelled()` explicitly (deploy and release already do; copy that pattern for new jobs) |
 | Back-merge PR wasn't created after a release | Check the `backmerge` job's log. If it says "not permitted to create pull requests", re-enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** |
 | Backport PR wasn't created after a hotfix/support merge | The cherry-pick onto `develop` hit conflicts — the `backmerge` job log contains the exact manual commands (`git cherry-pick -m 1 <merge-sha>` onto a `backport/<version>` branch); resolve and open the PR by hand |
-| rc dispatch fails at "Resolve and validate version" | The version label doesn't match the release branch (e.g. `1.2.0-rc.1` dispatched from `release/1.3.0`), or contains characters outside letters/digits/`.`/`-`. Use `<branch-version>` or `<branch-version>-<pre-release>` |
-| rc dispatch fails: "already built and stamped as '…'" | The commit already has an artifact carrying a different label — the version stamp is fixed at build time, so it can't be re-labeled. Re-dispatch with the existing label (or an empty version) to redeploy it, or push a new commit to mint the new rc |
-| Re-dispatch with same label rebuilds instead of reusing artifact | The prior `webapp-<sha>` artifact has expired (90-day retention), or predates label markers (no `webapp-<sha>.label.<label>` companion artifact, so its label can't be verified). A fresh build is the correct fallback — the new artifact will be used for any subsequent redeploys and for prod promotion |
-| Prod rollback dispatch fails: "Artifact for v… has expired" | The stg-tested artifact for that release is beyond its 90-day window. Re-dispatch the release pipeline from the release branch (`gh workflow run on-release.yml --ref release/X.Y.Z -f version=X.Y.Z-rc.1`) to rebuild the artifact, then retry the rollback dispatch |
+| Dispatch fails at "Derive version from the commit" | The workflow was dispatched from the wrong branch (the **Use workflow from** selector defaults to `develop`), or the branch name derives a label with characters outside letters/digits/`.`/`-`. Select the right branch, or rename it |
+| Dispatch rebuilds instead of reusing the push artifact | The `webapp-<sha>` artifact has expired (90-day retention), or predates label markers (no `webapp-<sha>.label.<label>` companion artifact). A fresh build is the correct fallback — same commit, same derived label, so the new artifact is interchangeable and will be used for prod promotion |
+| Dispatch log shows "label derivation changed since the push build" | The label-derivation logic in the workflow was edited between the push and the dispatch. The pipeline deploys the binary under the label it was actually stamped with (the stamp is compiled in); push a new commit if you want the new derivation |
+| Prod rollback dispatch fails: "Artifact for v… has expired" | The stg-tested artifact for that release is beyond its 90-day window. Re-dispatch the release pipeline from the release branch (`gh workflow run on-release.yml --ref release/X.Y.Z`) to rebuild the artifact, then retry the rollback dispatch |
 
 ## Repository settings the pipeline depends on
 
@@ -227,11 +224,11 @@ These live in GitHub settings, not in the workflow files — if the repo is ever
 | Rulesets `develop` / `main` / `release` | Settings → Rules | PR required; **build / Build & Test** status check required; `main` allows merge commits only; `main` source branches must include `support/*` |
 | Workflow permissions | Settings → Actions → General | Default token: **read-only**; **Allow GitHub Actions to create and approve pull requests: on** (the back-merge and backport PRs need it) |
 | Repo variables | Settings → Secrets and variables → Actions | `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (used by `_deploy.yml`; not secrets) |
-| Environment variables | Settings → Environments → (each env) → Environment variables | `AZURE_CLIENT_ID`, `WEBAPP_NAME` per environment — `_deploy.yml` reads them via the job's `environment:` scope, so entry workflows carry no per-env config |
+| Environment variables | Settings → Environments → (each env) → Environment variables | `AZURE_CLIENT_ID`, `WEBAPP_NAME`, `RESOURCE_GROUP` per environment — `_deploy.yml` reads them via the job's `environment:` scope (`RESOURCE_GROUP` drives the slot-swap steps), so entry workflows carry no per-env config |
 | Environments | Settings → Environments | `dev`, `stg`, `prod` — each matched by a federated credential on its deploy identity |
 
 There are deliberately **no repository secrets** — Azure auth is OIDC workload identity federation (see `docs/workload-identity-federation.md`).
 
 ## Infrastructure changes
 
-All Azure resources (App Services, VNets, Key Vaults, App Gateway, deploy identities) are Terraform-managed in a separate infrastructure repository — change infrastructure there via plan/apply, never in the Azure Portal. This repo contains no IaC; the resources the pipeline requires are listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources).
+All Azure resources (App Service plans, App Services, the prod staging slot, deploy identities) are Terraform-managed in the platform infrastructure repository (`avlon-technologies/infrastructure` — module `infra/modules/cicd-demo/`, roots `infra/environments/cicd-demo/{dev,stg,prod}/`) — change infrastructure there via plan/apply, never in the Azure Portal. This repo contains no IaC; the resources the pipeline requires are listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources).

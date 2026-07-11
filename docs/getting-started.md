@@ -16,7 +16,7 @@ Related reading: [workload identity federation](workload-identity-federation.md)
 
 | Requirement | Why |
 |---|---|
-| Azure subscription with rights to create resource groups, App Services, app registrations, and role assignments | Runtime + deploy identities |
+| Azure subscription with rights to create resource groups, App Services, user-assigned managed identities, and role assignments | Runtime + deploy identities |
 | GitHub repository admin access | Environments, rulesets, and Actions settings are repo settings, not code |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in (`az login`) | Identity setup |
 | [.NET 10 SDK](https://dotnet.microsoft.com/download) | Local build and test |
@@ -38,12 +38,12 @@ dotnet run --project Api      # http://localhost:5018/swagger
 
 ## Step 2 — Provision Azure resources
 
-The reference deployment provisions infrastructure with Terraform in a companion repository. If you don't have that, provision equivalents any way you prefer (Portal, Bicep, Terraform). The pipeline requires, **per environment** (`dev`, `stg`, `prod`):
+The reference deployment provisions infrastructure with Terraform in the platform repo `avlon-technologies/infrastructure`: module `infra/modules/cicd-demo/`, applied per environment from the roots `infra/environments/cicd-demo/{dev,stg,prod}/`. If you don't have that, provision equivalents any way you prefer (Portal, Bicep, Terraform). The pipeline requires, **per environment** (`dev`, `stg`, `prod`):
 
 | Resource | Requirement | Notes |
 |---|---|---|
-| Resource group | One per environment | Default naming: `<env>-demo-helloworld-rg`. The **prod** resource-group name is hardcoded in `_deploy.yml` (slot-swap commands) as `prod-demo-helloworld-rg` — keep the pattern or edit the workflow ([customization](customization.md)) |
-| App Service | Configured for the .NET 10 runtime | Its name becomes the `WEBAPP_NAME` environment variable. Reference deployment uses B1 for dev/stg |
+| Resource group | One per environment | Reference naming: `rg-cicd-demo-<env>-cc`. Its name becomes the `RESOURCE_GROUP` environment variable (used by the prod slot-swap commands in `_deploy.yml`) |
+| App Service | Configured for the .NET 10 runtime | Its name becomes the `WEBAPP_NAME` environment variable. Reference naming: `app-cicd-demo-<env>-cc`, on a Linux plan `asp-cicd-demo-<env>-cc` (B1 for dev/stg) |
 | **Prod only:** deployment slot named `staging` | Requires a plan tier that supports slots (reference deployment uses P0v3) | The slot name `staging` is hardcoded in `_deploy.yml` |
 
 Two assumptions worth knowing before you deviate from the defaults:
@@ -51,34 +51,33 @@ Two assumptions worth knowing before you deviate from the defaults:
 - **Smoke tests target the default hostnames** `https://<WEBAPP_NAME>.azurewebsites.net` and `https://<WEBAPP_NAME>-staging.azurewebsites.net`. Custom domains or private-endpoint-only apps need `_deploy.yml` edits.
 - The App Services must be reachable from GitHub-hosted runners (public internet) for the smoke tests to pass.
 
-The reference deployment also fronts all environments with a shared Application Gateway (health-probing `/healthz`) and gives each environment a Key Vault and VNet — useful patterns, but **not required** by the pipeline itself.
-
 ## Step 3 — Create the deploy identities
 
-One Entra ID app registration per environment, each trusted for exactly one GitHub environment and authorized for exactly one resource group. The full rationale and mechanism is in [workload-identity-federation.md](workload-identity-federation.md).
+One user-assigned managed identity per environment, living in that environment's resource group, each trusted for exactly one GitHub environment and authorized for exactly one resource group. The full rationale and mechanism is in [workload-identity-federation.md](workload-identity-federation.md).
 
 For each environment (shown for `dev` — repeat for `stg` and `prod`), replacing `<owner>/<repo>` with your repository:
 
 ```sh
-# 1. App registration + service principal
-az ad app create --display-name "myproject-github-deploy-dev"
-APP_ID=$(az ad app list --display-name "myproject-github-deploy-dev" --query "[0].appId" -o tsv)
-az ad sp create --id "$APP_ID"
+# 1. User-assigned managed identity, in the environment's resource group
+az identity create --name "mi-github-cicd-demo-dev-cc" --resource-group "rg-cicd-demo-dev-cc"
+CLIENT_ID=$(az identity show --name "mi-github-cicd-demo-dev-cc" \
+  --resource-group "rg-cicd-demo-dev-cc" --query clientId -o tsv)
+PRINCIPAL_ID=$(az identity show --name "mi-github-cicd-demo-dev-cc" \
+  --resource-group "rg-cicd-demo-dev-cc" --query principalId -o tsv)
 
 # 2. Federated credential: trust GitHub OIDC tokens for this repo + environment
-az ad app federated-credential create --id "$APP_ID" --parameters '{
-  "name": "github-myproject-dev",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:<owner>/<repo>:environment:dev",
-  "audiences": ["api://AzureADTokenExchange"]
-}'
+az identity federated-credential create --name "github-cicd-demo-dev" \
+  --identity-name "mi-github-cicd-demo-dev-cc" --resource-group "rg-cicd-demo-dev-cc" \
+  --issuer "https://token.actions.githubusercontent.com" \
+  --subject "repo:<owner>/<repo>:environment:dev" \
+  --audiences "api://AzureADTokenExchange"
 
 # 3. Website Contributor, scoped to this environment's resource group only
-az role assignment create --assignee "$APP_ID" --role "Website Contributor" \
-  --scope "/subscriptions/<subscription-id>/resourceGroups/dev-demo-helloworld-rg"
+az role assignment create --assignee "$PRINCIPAL_ID" --role "Website Contributor" \
+  --scope "/subscriptions/<subscription-id>/resourceGroups/rg-cicd-demo-dev-cc"
 ```
 
-Record each app registration's **client ID** (`$APP_ID`) — you'll need it in the next step. Client IDs are identifiers, not secrets.
+Record each managed identity's **client ID** (`$CLIENT_ID`) — you'll need it in the next step. Client IDs are identifiers, not secrets.
 
 > The `subject` string must exactly match `repo:<owner>/<repo>:environment:<env>` — this is the security boundary. A token from a fork, another repo, or a job not running in that GitHub environment is rejected.
 
@@ -90,8 +89,9 @@ Settings → Environments → create `dev`, `stg`, and `prod`. In each, add **en
 
 | Variable | Value |
 |---|---|
-| `AZURE_CLIENT_ID` | The client ID of that environment's app registration (Step 3) |
+| `AZURE_CLIENT_ID` | The client ID of that environment's managed identity (Step 3) |
 | `WEBAPP_NAME` | That environment's App Service name (Step 2) |
+| `RESOURCE_GROUP` | That environment's resource-group name (Step 2) — used by the slot-swap steps in `_deploy.yml` |
 
 Optionally add **required reviewers** to the `prod` environment for a human approval gate before production deploys. (The back-merge job runs in parallel with the deploy, so `develop` gets release commits back even while prod waits for approval.)
 
@@ -151,10 +151,10 @@ git checkout -b release/0.1.0
 git push -u origin release/0.1.0
 
 # Dispatch a release candidate to staging
-gh workflow run on-release.yml --ref release/0.1.0 -f version=0.1.0-rc.1
+gh workflow run on-release.yml --ref release/0.1.0
 ```
 
-The dispatch builds a promotable artifact, deploys it to stg, smoke-tests it, and tags the commit `build/stg/0.1.0-rc.1`. Then promote:
+The dispatch reuses the artifact the push already built (or rebuilds if it expired), deploys it to stg, smoke-tests it, and tags the commit `build/stg/0.1.0-build.<height>` (the label is derived from the commit — see the operations manual). Then promote:
 
 ```sh
 gh pr create --base main --head release/0.1.0 --title "Release 0.1.0"

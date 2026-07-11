@@ -90,10 +90,10 @@ Hotfix (`hotfix/*`) and support (`support/*`) branches follow the same stg-then-
 
 **To deploy your own instance:**
 
-- An Azure subscription, with permission to create resource groups, App Services, Entra ID app registrations, and role assignments
+- An Azure subscription, with permission to create resource groups, App Services, user-assigned managed identities, and role assignments
 - A GitHub repository (Actions enabled) where you have admin access — rulesets, environments, and Actions settings must be configured
 - [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`) for identity setup; [GitHub CLI](https://cli.github.com/) (`gh`) is optional but used throughout the docs
-- Provisioned Azure infrastructure — one App Service per environment (prod on a plan that supports deployment slots). The reference deployment provisions this with Terraform in a companion infrastructure repository; any provisioning method works as long as the [required resources](docs/getting-started.md#step-2--provision-azure-resources) exist.
+- Provisioned Azure infrastructure — one App Service per environment (prod on a plan that supports deployment slots). The reference deployment provisions this with Terraform in the platform repo `avlon-technologies/infrastructure` (module `infra/modules/cicd-demo/`); any provisioning method works as long as the [required resources](docs/getting-started.md#step-2--provision-azure-resources) exist.
 
 ## Quick start (local)
 
@@ -115,7 +115,7 @@ Condensed from [docs/getting-started.md](docs/getting-started.md), which has the
 
 1. **Get the code** — use this repo as a template (or fork/clone) into your own GitHub repository, with `develop` as the default branch.
 2. **Provision Azure** — per environment: a resource group and an App Service; prod additionally needs a `staging` deployment slot.
-3. **Create deploy identities** — one Entra ID app registration per environment with a federated credential trusting `repo:<owner>/<repo>:environment:<env>`, and the Website Contributor role scoped to that environment's resource group. See [workload identity federation](docs/workload-identity-federation.md).
+3. **Create deploy identities** — one user-assigned managed identity per environment with a federated credential trusting `repo:<owner>/<repo>:environment:<env>`, and the Website Contributor role scoped to that environment's resource group. See [workload identity federation](docs/workload-identity-federation.md).
 4. **Configure GitHub** — create the `dev`, `stg`, `prod` environments and set the variables and settings below.
 5. **Customize** — work through [docs/customization.md](docs/customization.md) (project names, resource-group names, smoke-test URLs).
 6. **Deploy** — merge or push to `develop`; the pipeline builds, tests, deploys to dev, and smoke-tests the result.
@@ -141,8 +141,9 @@ Settings → Environments — create `dev`, `stg`, and `prod`, each with:
 
 | Variable | Value |
 |---|---|
-| `AZURE_CLIENT_ID` | Client ID of that environment's deploy app registration |
+| `AZURE_CLIENT_ID` | Client ID of that environment's deploy managed identity |
 | `WEBAPP_NAME` | That environment's App Service name |
+| `RESOURCE_GROUP` | That environment's resource-group name (used by the slot-swap steps) |
 
 The deploy job's `environment:` declaration scopes these variables, so the entry workflows carry no per-environment configuration. Optionally add required reviewers on `prod` for a manual approval gate before production deploys.
 
@@ -192,7 +193,7 @@ Deploys to the same environment serialize via concurrency groups (`deploy-dev` /
 
 ## Azure resource naming
 
-The reference deployment names resources `<env>-demo-helloworld-<type>` (e.g. `prod-demo-helloworld-rg`, `prod-demo-helloworld-api`) — environment prefix, project name, resource type. The resource-group pattern is currently hardcoded in `_deploy.yml` (used by the prod slot swap), so keep the pattern or update the workflow when renaming — see [customization](docs/customization.md). The per-environment topology is described in [C2 — Containers](docs/c2-containers/README.md#deployment-topology-per-environment).
+The reference deployment names resources `<type>-cicd-demo-<env>-cc` (e.g. `rg-cicd-demo-prod-cc`, `app-cicd-demo-prod-cc`, `asp-cicd-demo-prod-cc`) — resource-type prefix, project name, environment, region suffix, following the org's engineering-standards handbook. Nothing is hardcoded in the workflows: the names reach `_deploy.yml` only through each GitHub environment's `WEBAPP_NAME` and `RESOURCE_GROUP` variables — see [customization](docs/customization.md). The per-environment topology is described in [C2 — Containers](docs/c2-containers/README.md#deployment-topology-per-environment).
 
 ## Maintenance
 

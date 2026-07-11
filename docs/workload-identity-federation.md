@@ -25,11 +25,11 @@ sequenceDiagram
 
 1. **Request ID token** — the job requests an OIDC JWT from GitHub's token endpoint (`$ACTIONS_ID_TOKEN_REQUEST_URL`). The token is RS256-signed with GitHub's private key and contains claims describing the job context: repo, branch, workflow, environment, commit SHA, run ID, etc.
 
-2. **Token exchange** — the job POSTs the JWT and the app registration's client ID to Entra ID's token endpoint. No secret is required because the JWT is the proof of identity.
+2. **Token exchange** — the job POSTs the JWT and the managed identity's client ID to Entra ID's token endpoint. No secret is required because the JWT is the proof of identity.
 
-3. **Validation** — Entra ID fetches GitHub's JWKS endpoint to verify the signature, checks that the token is unexpired, and matches the `sub` claim against the **federated credential** configured on the app registration.
+3. **Validation** — Entra ID fetches GitHub's JWKS endpoint to verify the signature, checks that the token is unexpired, and matches the `sub` claim against the **federated credential** configured on the managed identity.
 
-4. **Access token** — if validation passes, Entra ID returns a short-lived access token scoped to the RBAC roles assigned to the app registration.
+4. **Access token** — if validation passes, Entra ID returns a short-lived access token scoped to the RBAC roles assigned to the managed identity.
 
 5. **Deployment** — the job uses the access token to call Azure's management APIs and deploy the app.
 
@@ -39,16 +39,16 @@ sequenceDiagram
 |---|---|---|
 | Token request | Authorizes the job to request an ID token | `permissions: id-token: write` in the caller workflows |
 | Token subject | Determines the `sub` claim (includes the GitHub environment) | `environment: <env>` on the deploy job in `_deploy.yml` |
-| Identity | The service principal the job authenticates as | App registrations `demo-helloworld-github-deploy-{dev,stg,prod}` in Entra ID |
-| Trust rule | Which JWTs Entra ID will accept | A federated credential on each app registration, matching one repo + environment |
+| Identity | The service principal the job authenticates as | User-assigned managed identities `mi-github-cicd-demo-{dev,stg,prod}-cc`, each in its environment's resource group |
+| Trust rule | Which JWTs Entra ID will accept | A federated credential on each managed identity, matching one repo + environment |
 | Permissions | What the identity may do | RBAC role (Website Contributor) scoped to that environment's resource group |
 | Addressing | Which identity/tenant/subscription to target | `azure-client-id` input + `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` repo variables |
 
-Each environment has its own app registration scoped to its own resource group — a dev deploy cannot affect prod resources.
+Each environment has its own managed identity scoped to its own resource group — a dev deploy cannot affect prod resources.
 
 ## The federated credential
 
-Each app registration carries a single federated credential. This is the one on the prod identity:
+Each managed identity carries a single federated credential. This is the one on the prod identity:
 
 ```json
 {
@@ -69,8 +69,8 @@ Entra ID accepts a token only if all three fields match:
 
 To inspect or manage federated credentials:
 
-- **Portal:** Entra ID → App registrations → `demo-helloworld-github-deploy-<env>` → **Certificates & secrets** → **Federated credentials**
-- **CLI:** `az ad app federated-credential list --id <client-id>`
+- **Portal:** Managed Identities → `mi-github-cicd-demo-<env>-cc` → **Settings** → **Federated credentials**
+- **CLI:** `az identity federated-credential list --identity-name mi-github-cicd-demo-<env>-cc --resource-group rg-cicd-demo-<env>-cc`
 
 GitHub mints and signs tokens for every workflow automatically. Entra ID trusts none of them unless a federated credential explicitly opts in — that narrow match is where the security boundary lives.
 
@@ -78,7 +78,7 @@ GitHub mints and signs tokens for every workflow automatically. Entra ID trusts 
 
 The workflow files expose the client ID, tenant ID, and subscription ID in plain text. None are sensitive:
 
-- The **client ID** identifies the app registration but cannot authenticate without a valid GitHub-signed JWT with a matching `sub`.
+- The **client ID** identifies the managed identity but cannot authenticate without a valid GitHub-signed JWT with a matching `sub`.
 - The **tenant and subscription IDs** are addressing information, not credentials.
 
 The JWT is never stored: it's minted per job, used once for token exchange, and GitHub auto-masks it in logs. Even if intercepted, the token expires in ~5 minutes, and replaying it from outside the original job context produces a `sub` mismatch. A successful login is additionally constrained to one resource group by RBAC.

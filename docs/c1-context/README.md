@@ -17,7 +17,7 @@ graph TB
     end
 
     github[GitHub<br/>«external system»<br/>Source, Actions runners,<br/>OIDC issuer, Releases]
-    azure[Microsoft Azure<br/>«external system»<br/>App Service, App Gateway,<br/>Entra ID, Key Vault]
+    azure[Microsoft Azure<br/>«external system»<br/>App Service, Entra ID,<br/>managed identities]
 
     consumer -->|HTTPS: GET /v1/hello, /swagger| api
     developer -->|Push commits, open PRs| api
@@ -40,7 +40,7 @@ graph TB
 | System | What we use it for | Why it's a dependency, not part of our system |
 |---|---|---|
 | **GitHub** | Source control, pull requests + branch rulesets (the quality gates), Actions (CI/CD compute), the OIDC token issuer for cloud auth, and GitHub Releases. | We consume it as a platform; we configure it but don't operate it. |
-| **Microsoft Azure** | The runtime: App Service hosts the API, a shared Application Gateway fronts all environments, Entra ID (via App Registrations + federated credentials) authorizes deploys, Key Vault holds any per-environment secrets. | Managed cloud services; provisioned by Terraform in a separate repo, not built by us. |
+| **Microsoft Azure** | The runtime: App Service hosts the API (each environment served directly at its `azurewebsites.net` URL), Entra ID (via user-assigned managed identities + federated credentials) authorizes deploys. | Managed cloud services; provisioned by Terraform in the platform repo, not built by us. |
 
 ## System boundary — what's in, what's out
 
@@ -50,7 +50,7 @@ graph TB
 - The contract each deploy must satisfy (smoke test + version assertion).
 
 **Outside the boundary** (depended upon, specified elsewhere):
-- The Azure runtime topology — resource groups, VNets, App Services, slots, the App Gateway, Key Vaults, and deploy identities — is provisioned by Terraform in **`../cicd-infrastructure`**. Deploys fail until that infrastructure exists for the target environment.
+- The Azure runtime topology — resource groups, App Service plans, App Services, slots, and deploy identities — is provisioned by Terraform in the platform repo **`avlon-technologies/infrastructure`** (locally `../infrastructure`): module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/`. Deploys fail until that infrastructure exists for the target environment.
 - GitHub repository settings (rulesets, workflow permissions, environment variables) — configured in the GitHub UI, documented in the [operations manual](../operations-manual.md), not code in this repo.
 
 ## Environments
