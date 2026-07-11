@@ -5,10 +5,10 @@ on:
     inputs:
       environment:
         description: >
-          GitHub environment name (dev | stg | prod). The App Service name and
-          OIDC client ID come from that environment's variables (WEBAPP_NAME,
-          AZURE_CLIENT_ID) — the job's `environment:` declaration scopes the
-          vars context to it.
+          GitHub environment name (dev | stg | prod). The App Service name,
+          resource group, and OIDC client ID come from that environment's
+          variables (WEBAPP_NAME, RESOURCE_GROUP, AZURE_CLIENT_ID) — the job's
+          `environment:` declaration scopes the vars context to it.
         type: string
         required: true
       build-label:
@@ -133,7 +133,7 @@ jobs:
         if: ${{ inputs.slot-swap }}
         run: >
           az webapp deployment slot swap
-          --resource-group ${{ inputs.environment }}-demo-helloworld-rg
+          --resource-group ${{ vars.RESOURCE_GROUP }}
           --name ${{ vars.WEBAPP_NAME }}
           --slot staging
           --target-slot production
@@ -173,7 +173,7 @@ jobs:
         run: |
           echo "::error::Post-swap smoke test failed — swapping the previous build back into production."
           az webapp deployment slot swap \
-            --resource-group ${{ inputs.environment }}-demo-helloworld-rg \
+            --resource-group ${{ vars.RESOURCE_GROUP }} \
             --name ${{ vars.WEBAPP_NAME }} \
             --slot staging \
             --target-slot production
