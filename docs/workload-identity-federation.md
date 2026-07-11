@@ -54,10 +54,12 @@ Each app registration carries a single federated credential. This is the one on 
 {
   "name": "github-cicd-demo-prod",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:pixelbits-mk/cicd-demo:environment:prod",
+  "subject": "repo:<owner>/<repo>:environment:prod",
   "audiences": ["api://AzureADTokenExchange"]
 }
 ```
+
+(`<owner>/<repo>` is this GitHub repository — the credential trusts exactly one repo + environment pair. Creation commands are in [getting-started.md](getting-started.md#step-3--create-the-deploy-identities).)
 
 Entra ID accepts a token only if all three fields match:
 

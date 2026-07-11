@@ -2,13 +2,17 @@
 
 How to build, deploy, release, and verify this application across environments.
 
+> Setting the pipeline up for the first time? Start with [getting-started.md](getting-started.md). Adapting the template to your own project? See [customization.md](customization.md). This manual covers day-to-day operation of a configured pipeline.
+
 ## Environments at a glance
 
 | Environment | App Service | Direct URL | Via shared gateway | Deployed by |
 |---|---|---|---|---|
-| dev | `dev-demo-helloworld-api` | https://dev-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8081/ | push to `develop` (automatic) |
-| stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | http://52.139.34.97:8082/ | manual dispatch of a release, hotfix, or support pipeline |
-| prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | http://52.139.34.97/ | merge PR to `main` (automatic, blue/green slot swap) |
+| dev | `dev-demo-helloworld-api` | https://dev-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>:8081/` | push to `develop` (automatic) |
+| stg | `stg-demo-helloworld-api` | https://stg-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>:8082/` | manual dispatch of a release, hotfix, or support pipeline |
+| prod | `prod-demo-helloworld-api` | https://prod-demo-helloworld-api.azurewebsites.net | `http://<gateway-ip>/` | merge PR to `main` (automatic, blue/green slot swap) |
+
+(`<gateway-ip>` is the shared Application Gateway's public IP, an output of the infrastructure deployment — one frontend port per environment.)
 
 **Quality gates (enforced by repository rulesets):** all merges to `develop` and `main` go through a pull request, every PR must pass the **build / Build & Test** check (the `on-pr.yml` workflow), and `main` accepts merge commits only — squash and rebase are disabled there because release version detection reads the merge commit subject. **PRs into `main` may only come from `release/*`, `hotfix/*`, or `support/*` branches** (the **Guard main source branch** check) — features flow to prod through a release, never directly.
 
@@ -193,7 +197,7 @@ The rc number identifies a *candidate build*; the branch identifies the *line of
 | Symptom | Likely cause |
 |---|---|
 | Run fails instantly with `startup_failure` and no logs | A caller job is missing the `permissions:` block (`id-token: write`, `contents: write`) that `_deploy.yml` requires — the repo default token is read-only and called workflows can't elevate it |
-| Deploy fails: "Resource … doesn't exist" | The target App Service hasn't been provisioned — run `terraform apply` for that environment in `../cicd-infrastructure` |
+| Deploy fails: "Resource … doesn't exist" | The target App Service hasn't been provisioned — apply the infrastructure for that environment first (see [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources)) |
 | Deploy fails at "Login to Azure" | Federated credential / identity problem — see `docs/workload-identity-federation.md` |
 | Push to `develop`/`main` rejected (GH013) | Rulesets require a PR — open one instead of pushing directly |
 | Release merged but prod run fails: "Could not parse a release/hotfix/support branch from the merge commit subject" | The PR was squash-merged or the merge message was customized, hiding the branch name — the run refuses to fall back to an untested rebuild. Redeploy by dispatching **CI/CD — Main → PROD** with the version, and keep the default merge message next time (main's ruleset blocks squash, so a customized message is the usual cause) |
@@ -230,4 +234,4 @@ There are deliberately **no repository secrets** — Azure auth is OIDC workload
 
 ## Infrastructure changes
 
-All Azure resources (App Services, VNets, Key Vaults, App Gateway, deploy identities) are Terraform-managed in the separate **cicd-infrastructure** repo — change infrastructure there via plan/apply, never in the Azure Portal. See that repo's README for usage.
+All Azure resources (App Services, VNets, Key Vaults, App Gateway, deploy identities) are Terraform-managed in a separate infrastructure repository — change infrastructure there via plan/apply, never in the Azure Portal. This repo contains no IaC; the resources the pipeline requires are listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources).
