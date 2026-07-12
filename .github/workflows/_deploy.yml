@@ -58,7 +58,11 @@ on:
 jobs:
   deploy:
     name: Deploy to ${{ inputs.environment }}
-    runs-on: ubuntu-latest
+    # Self-hosted: the App Service deploy surfaces are IP-allowlisted
+    # (deploy_ingress_cidrs in the infrastructure repo, ADR-0005/0006), so
+    # deploys must egress from the allowlisted self-hosted runner —
+    # GitHub-hosted runners get 403s once the allowlist is on.
+    runs-on: [self-hosted]
     environment: ${{ inputs.environment }}
     permissions:
       id-token: write
@@ -140,7 +144,11 @@ jobs:
 
       - name: Smoke test deployment
         env:
-          URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
+          # Through the gateway when the environment defines GATEWAY_URL —
+          # the app's main site only admits the gateway's IP (ADR-0005), so
+          # its own hostname 403s everyone including this runner. Falls back
+          # to the app hostname for environments without the lockdown.
+          URL: ${{ vars.GATEWAY_URL || format('https://{0}.azurewebsites.net', vars.WEBAPP_NAME) }}
           EXPECTED: ${{ inputs.build-label }}
         run: |
           # Same contract as the slot smoke test: right answer AND right
@@ -180,7 +188,7 @@ jobs:
 
       - name: Output deployment URL
         env:
-          URL: https://${{ vars.WEBAPP_NAME }}.azurewebsites.net
+          URL: ${{ vars.GATEWAY_URL || format('https://{0}.azurewebsites.net', vars.WEBAPP_NAME) }}
         run: |
           echo "Deployed ${{ inputs.build-label }} to ${{ inputs.environment }}: $URL"
           {
