@@ -80,13 +80,18 @@ jobs:
       - name: Build
         # InformationalVersion must be set at build time — the assembly
         # attribute is compiled in here; publish below runs with --no-build.
+        # RepositoryUrl becomes assembly metadata (see Api.csproj) that the
+        # app's Swagger description uses for its commit link, so the link
+        # follows the repo wherever it's hosted (forks, renames).
         env:
           BUILD_LABEL: ${{ steps.set-label.outputs.value }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: >
           dotnet build ${{ inputs.solution }}
           --configuration Release
           --no-restore
           /p:InformationalVersion="$BUILD_LABEL"
+          /p:RepositoryUrl="$REPO_URL"
 
       - name: Test
         id: test

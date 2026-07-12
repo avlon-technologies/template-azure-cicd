@@ -11,7 +11,7 @@ The pipeline's one hard contract with the application is worth understanding fir
 | Solution name | `cicd-demo.sln` | Your solution. Also update the `solution` input default in `_build.yml` if you rename it |
 | Project names/paths | `Api/`, `Api.Test/` | Your projects. The test and publish paths are **hardcoded** in `_build.yml` (`dotnet test Api.Test/Api.Test.csproj`, `dotnet publish Api/Api.csproj`) — update both steps |
 | Target framework | `Directory.Build.props` (`net10.0`) and `dotnet-version: '10.x'` in `_build.yml` | Your .NET version — keep the two in sync, and match the App Service runtime stack |
-| Commit link in Swagger | `Api/Program.cs` (`commitNote`) | Points at `https://github.com/pixelbits-mk/cicd-demo/commit/…` — a **stale repo URL**; change it to your repository |
+| Commit link in Swagger | `Api/Program.cs` (`commitNote`) | Nothing to change — CI stamps the repository URL into assembly metadata (`/p:RepositoryUrl` in `_build.yml` → `AssemblyMetadata` in `Api.csproj`), so the link follows your repo automatically; local builds show the SHA unlinked |
 | OpenAPI title | `Api/Program.cs` (`document.Info.Title = "cicd-demo API"`) | Your API's name |
 | Test expectations | `Api.Test/HelloWorldEndpointTests.cs` | Tests assert the sample endpoints — replace alongside the app |
 | `public partial class Program { }` | End of `Api/Program.cs` | **Keep it** (adapted to your entry point). It makes the entry point visible to `WebApplicationFactory<Program>` — removing it breaks the integration tests |

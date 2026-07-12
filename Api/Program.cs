@@ -5,17 +5,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 // The CI build stamps its build label (e.g. 1.2.0, 1.2.0-rc.1, 20260703.5)
 // into InformationalVersion; the SDK appends the commit SHA as SemVer build
-// metadata ("+<sha>"). Split them: the label is the display version, the SHA
-// (shortened, linked) goes in the description.
-var informationalVersion = Assembly.GetExecutingAssembly()
+// metadata ("+<sha>"). BuildInfo splits them: the label is the display
+// version, the shortened SHA goes in the description — linked to the
+// repository when CI stamped its URL in (see Api.csproj), plain otherwise
+// (local builds).
+var assembly = Assembly.GetExecutingAssembly();
+var (buildLabel, commitSha) = BuildInfo.Split(assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-    .InformationalVersion ?? "unknown";
-var labelAndSha = informationalVersion.Split('+', 2);
-var buildLabel = labelAndSha[0];
-var commitSha = labelAndSha.Length > 1 ? labelAndSha[1] : null;
-var commitNote = commitSha is null
-    ? ""
-    : $" — commit: [`{commitSha[..Math.Min(8, commitSha.Length)]}`](https://github.com/pixelbits-mk/cicd-demo/commit/{commitSha})";
+    .InformationalVersion);
+var repositoryUrl = assembly
+    .GetCustomAttributes<AssemblyMetadataAttribute>()
+    .FirstOrDefault(a => a.Key == "RepositoryUrl")?.Value;
+var commitNote = BuildInfo.CommitNote(commitSha, repositoryUrl);
 
 builder.Services
     .AddApiVersioning(options =>
@@ -58,11 +59,10 @@ builder.Services.AddOpenApi(options =>
 
 var app = builder.Build();
 
-// Behind the shared Application Gateway the API is served under a path
-// prefix (PATH_BASE, e.g. /cicd-demo) that the gateway forwards as-is.
-// UsePathBase strips the prefix when present and does nothing when absent,
-// so the direct hostnames (*.azurewebsites.net, the custom domains, local
-// dev) are unaffected.
+// A path-prefixing reverse proxy or gateway can serve the API under a
+// prefix it forwards as-is (PATH_BASE, e.g. /cicd-demo). UsePathBase strips
+// the prefix when present and does nothing when absent, so direct traffic
+// (*.azurewebsites.net, custom domains, local dev) is unaffected.
 var pathBase = app.Configuration["PATH_BASE"];
 if (!string.IsNullOrEmpty(pathBase))
 {
@@ -72,9 +72,9 @@ if (!string.IsNullOrEmpty(pathBase))
 // Root stays unversioned and returns the plain greeting.
 app.MapGet("/", () => "Hello World!").ExcludeFromDescription();
 
-// Dedicated liveness probe, decoupled from the greeting endpoint: the App
-// Gateway health probe targets "/healthz". Register dependency checks here
-// (Key Vault, etc.) to have them reported as Degraded/Unhealthy.
+// Dedicated liveness probe, decoupled from the greeting endpoint — point
+// platform/gateway health probes at "/healthz". Register dependency checks
+// here (Key Vault, etc.) to have them reported as Degraded/Unhealthy.
 app.MapHealthChecks("/healthz").ExcludeFromDescription();
 
 // API endpoints are versioned by URL segment; breaking changes are published
@@ -94,7 +94,6 @@ api.MapGet("/hello", () => "Hello World!")
     .WithSummary("Returns the hello-world greeting.")
     .MapToApiVersion(new ApiVersion(1));
 
-// this is an update
 // OpenAPI spec + Swagger UI are deliberately enabled in every environment,
 // including prod (this is a demo API with no sensitive surface).
 app.MapOpenApi(); // serves /openapi/v1.json
