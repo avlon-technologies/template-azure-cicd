@@ -45,11 +45,29 @@ builder.Services.AddOpenApi(options =>
         document.Info.Version = buildLabel;
         document.Info.Description =
             $"Deployed build: **{buildLabel}**{commitNote} — environment: **{builder.Environment.EnvironmentName}**";
+
+        // No servers entry: Swagger UI then resolves calls against the URL
+        // the document was fetched from, which keeps "Try it out"
+        // same-origin whether the doc was reached directly or through the
+        // gateway's path prefix.
+        document.Servers?.Clear();
+
         return Task.CompletedTask;
     });
 });
 
 var app = builder.Build();
+
+// Behind the shared Application Gateway the API is served under a path
+// prefix (PATH_BASE, e.g. /cicd-demo) that the gateway forwards as-is.
+// UsePathBase strips the prefix when present and does nothing when absent,
+// so the direct hostnames (*.azurewebsites.net, the custom domains, local
+// dev) are unaffected.
+var pathBase = app.Configuration["PATH_BASE"];
+if (!string.IsNullOrEmpty(pathBase))
+{
+    app.UsePathBase(pathBase);
+}
 
 // Root stays unversioned and returns the plain greeting.
 app.MapGet("/", () => "Hello World!").ExcludeFromDescription();
@@ -82,7 +100,10 @@ api.MapGet("/hello", () => "Hello World!")
 app.MapOpenApi(); // serves /openapi/v1.json
 app.UseSwaggerUI(options =>
 {
-    options.SwaggerEndpoint("/openapi/v1.json", "cicd-demo v1");
+    // Relative to the UI's own URL (/swagger/), so the document fetch stays
+    // under whatever path prefix the UI was reached through — an absolute
+    // "/openapi/v1.json" would escape the gateway's PATH_BASE prefix.
+    options.SwaggerEndpoint("../openapi/v1.json", "cicd-demo v1");
 }); // serves /swagger
 
 app.Run();
