@@ -5,26 +5,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 // The CI build stamps its build label (e.g. 1.2.0, 1.2.0-rc.1, 20260703.5)
 // into InformationalVersion; the SDK appends the commit SHA as SemVer build
-// metadata ("+<sha>"). Split them: the label is the display version, the
-// shortened SHA goes in the description — linked to the repository when CI
-// stamped its URL in (see Api.csproj), plain otherwise (local builds).
+// metadata ("+<sha>"). BuildInfo splits them: the label is the display
+// version, the shortened SHA goes in the description — linked to the
+// repository when CI stamped its URL in (see Api.csproj), plain otherwise
+// (local builds).
 var assembly = Assembly.GetExecutingAssembly();
-var informationalVersion = assembly
+var (buildLabel, commitSha) = BuildInfo.Split(assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-    .InformationalVersion ?? "unknown";
-var labelAndSha = informationalVersion.Split('+', 2);
-var buildLabel = labelAndSha[0];
-var commitSha = labelAndSha.Length > 1 ? labelAndSha[1] : null;
+    .InformationalVersion);
 var repositoryUrl = assembly
     .GetCustomAttributes<AssemblyMetadataAttribute>()
-    .FirstOrDefault(a => a.Key == "RepositoryUrl")?.Value?.TrimEnd('/');
-var shortSha = commitSha is null ? null : commitSha[..Math.Min(8, commitSha.Length)];
-var commitNote = (shortSha, repositoryUrl) switch
-{
-    (null, _) => "",
-    (_, null) => $" — commit: `{shortSha}`",
-    _ => $" — commit: [`{shortSha}`]({repositoryUrl}/commit/{commitSha})",
-};
+    .FirstOrDefault(a => a.Key == "RepositoryUrl")?.Value;
+var commitNote = BuildInfo.CommitNote(commitSha, repositoryUrl);
 
 builder.Services
     .AddApiVersioning(options =>
