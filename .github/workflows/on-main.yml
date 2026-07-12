@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to redeploy to prod (e.g. 1.6.0). Leave empty to redeploy current main.'
+        description: 'Released version to roll back to (e.g. 1.6.0). See the Releases page.'
         required: false
         type: string
+      rebuild-from-source:
+        description: 'Emergency escape hatch: knowingly rebuild main from source and deploy it without stg validation. Ignored when a version is given.'
+        required: false
+        type: boolean
+        default: false
 
 # Serialize prod deploys — overlapping runs would race the slot swap. Queued
 # runs wait; only the newest queued run is kept (superseded ones are dropped).
@@ -28,12 +33,34 @@ jobs:
       promote-run-id: ${{ steps.promote.outputs.run-id }}
       promote-sha: ${{ steps.promote.outputs.sha }}
     steps:
+      - name: Validate dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        # The dispatch branch dropdown cannot be restricted in the GitHub UI,
+        # and this guard only exists on refs that contain it — the prod
+        # environment's deployment branch policy (main only) is the
+        # enforcement of record. This fails faster, with a better message,
+        # before a build spends minutes.
+        env:
+          REF: ${{ github.ref }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REBUILD: ${{ inputs.rebuild-from-source }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Main → PROD dispatches must run from main (got '${REF#refs/heads/}'). To ship a release, merge its PR into main — the push run promotes the stg-tested artifact. To roll back, dispatch from main with a released version."
+            exit 1
+          fi
+          if [ -z "$INPUT_VERSION" ] && [ "$REBUILD" != "true" ]; then
+            echo "::error::No version given. Merge the release PR to promote the stg-tested artifact, pass a released version to roll back, or set rebuild-from-source to knowingly deploy an untested rebuild of main."
+            exit 1
+          fi
+
       - name: Extract version from merge commit
         id: version
         # Push: parse the merge commit subject for a release/hotfix/support
         # branch name — a subject that doesn't parse is a hard error (see below).
         # Dispatch with version: use the supplied version directly (rollback path).
-        # Dispatch without version: no version → _build.yml falls back to date label.
+        # Dispatch without version (only reachable with rebuild-from-source —
+        # see Validate dispatch): no version → _build.yml falls back to date label.
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           INPUT_VERSION: ${{ inputs.version }}
@@ -57,9 +84,11 @@ jobs:
             # mapped to a stg-tested artifact. Fail rather than fall through
             # to a fresh date-labeled rebuild that would ship untested source
             # to prod. (A version-less rebuild remains available as an
-            # explicit escape hatch: dispatch this workflow with no input.)
+            # explicit escape hatch: dispatch this workflow from main with
+            # rebuild-from-source set — an empty version alone is refused by
+            # the Validate dispatch step.)
             if [ "$EVENT" = "push" ] && [ -z "$VERSION" ]; then
-              echo "::error::Could not parse a release/hotfix/support branch from the merge commit subject '$(echo "$COMMIT_MESSAGE" | head -1)'. Refusing to rebuild for prod — the stg-tested artifact cannot be located without a version. Keep the default merge commit message ('Merge pull request #N from …/release/X.Y.Z'); to redeploy anyway, dispatch this workflow manually."
+              echo "::error::Could not parse a release/hotfix/support branch from the merge commit subject '$(echo "$COMMIT_MESSAGE" | head -1)'. Refusing to rebuild for prod — the stg-tested artifact cannot be located without a version. Keep the default merge commit message ('Merge pull request #N from …/release/X.Y.Z'); to redeploy anyway, dispatch this workflow with rebuild-from-source."
               exit 1
             fi
             echo "value=$VERSION" >> $GITHUB_OUTPUT

@@ -226,6 +226,7 @@ These live in GitHub settings, not in the workflow files — if the repo is ever
 | Repo variables | Settings → Secrets and variables → Actions | `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (used by `_deploy.yml`; not secrets) |
 | Environment variables | Settings → Environments → (each env) → Environment variables | `AZURE_CLIENT_ID`, `WEBAPP_NAME`, `RESOURCE_GROUP` per environment — `_deploy.yml` reads them via the job's `environment:` scope (`RESOURCE_GROUP` drives the slot-swap steps), so entry workflows carry no per-env config |
 | Environments | Settings → Environments | `dev`, `stg`, `prod` — each matched by a federated credential on its deploy identity |
+| Prod protection | Settings → Environments → prod | **Required reviewer** (deploy approval gate) and **deployment branch policy: `main` only** — the platform-level enforcement that a "Main → PROD" dispatch from any other ref (e.g. an unmerged `release/*` branch) is refused at the deploy job, regardless of workflow logic. The `Validate dispatch` step in `on-main.yml` is the fast, explanatory layer in front of it |
 
 There are deliberately **no repository secrets** — Azure auth is OIDC workload identity federation (see `docs/workload-identity-federation.md`).
 
