@@ -69,4 +69,45 @@ public class HelloWorldEndpointTests : IClassFixture<WebApplicationFactory<Progr
         response.EnsureSuccessStatusCode();
         Assert.Contains("swagger-ui", await response.Content.ReadAsStringAsync());
     }
+
+    [Fact]
+    public async Task OpenApiSpec_OmitsServers_SoTryItOutStaysSameOrigin()
+    {
+        var client = _factory.CreateClient();
+
+        var spec = await client.GetStringAsync("/openapi/v1.json");
+
+        // With no servers entry, Swagger UI resolves calls against the URL the
+        // document was fetched from — correct both directly and behind the
+        // gateway's path prefix.
+        Assert.DoesNotContain("\"servers\"", spec);
+    }
+
+    [Fact]
+    public async Task PathBase_PrefixedRequests_AreServed()
+    {
+        var client = PathBasedFactory().CreateClient();
+
+        var response = await client.GetAsync("/cicd-demo/v1/hello");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("Hello World!", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task PathBase_UnprefixedRequests_StillServed()
+    {
+        // UsePathBase must be tolerant: direct traffic (azurewebsites.net,
+        // custom domains, the pipeline's smoke tests) carries no prefix.
+        var client = PathBasedFactory().CreateClient();
+
+        var response = await client.GetAsync("/v1/hello");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("Hello World!", await response.Content.ReadAsStringAsync());
+    }
+
+    private WebApplicationFactory<Program> PathBasedFactory() =>
+        _factory.WithWebHostBuilder(builder =>
+            builder.UseSetting("PATH_BASE", "/cicd-demo"));
 }
