@@ -54,6 +54,16 @@ on:
         type: boolean
         required: false
         default: false
+      runner-labels:
+        description: >
+          JSON array of runner labels the deploy job requires. The default
+          matches any self-hosted runner. Once more than one runner exists,
+          give each environment's runner a distinct label and pin it here
+          (e.g. '["self-hosted", "prod-deploy"]') so prod deploys only run
+          on isolated prod runners — see getting-started's runner section.
+        type: string
+        required: false
+        default: '["self-hosted"]'
 
 jobs:
   deploy:
@@ -62,7 +72,7 @@ jobs:
     # (deploy_ingress_cidrs in the infrastructure repo, ADR-0005/0006), so
     # deploys must egress from the allowlisted self-hosted runner —
     # GitHub-hosted runners get 403s once the allowlist is on.
-    runs-on: [self-hosted]
+    runs-on: ${{ fromJSON(inputs.runner-labels) }}
     environment: ${{ inputs.environment }}
     # A hung deploy or swap must not hold the environment's concurrency
     # group (and the shared runner) for GitHub's 6-hour default.
@@ -90,6 +100,36 @@ jobs:
           path: ./publish
           run-id: ${{ inputs.artifact-run-id || github.run_id }}
           github-token: ${{ github.token }}
+
+      - name: Verify artifact integrity and provenance
+        # Defense-in-depth behind the promotion-time provenance check
+        # (find-verified-artifact.sh): prove the *bytes on this runner* are
+        # the bytes _build.yml produced. The manifest's attestation is
+        # GitHub-signed and pinned to this repo's _build.yml, so a swapped
+        # or tampered artifact fails either the attestation verify or the
+        # re-hash. No silent fallback: an artifact without an attested
+        # manifest (built before attestations) must be re-staged —
+        # re-dispatch its source pipeline to build a fresh candidate.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f publish/SHA256SUMS ]; then
+            echo "::error::Artifact has no SHA256SUMS manifest (built before attestations were introduced, or stripped). Re-dispatch the source pipeline to produce a fresh, attested artifact."
+            exit 1
+          fi
+          gh attestation verify publish/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/_build.yml"
+          (cd publish && sha256sum --check --quiet SHA256SUMS)
+          EXTRA=$(cd publish && comm -13 \
+            <(awk '{ $1=""; sub(/^ +/, ""); print }' SHA256SUMS | sort) \
+            <(find . -type f ! -name SHA256SUMS | sort))
+          if [ -n "$EXTRA" ]; then
+            echo "::error::Artifact contains files not covered by the attested manifest:"
+            echo "$EXTRA"
+            exit 1
+          fi
+          echo "Artifact verified: manifest attested by _build.yml, all file hashes match, no uncovered files."
 
       - name: Login to Azure
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0

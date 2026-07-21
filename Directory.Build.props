@@ -4,6 +4,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Lock the dependency graph: restore writes packages.lock.json per
+         project (commit them), and CI restores with - -locked-mode so an
+         unreviewed transitive version change fails the build instead of
+         silently entering the artifact. After adding/updating a package,
+         run `dotnet restore` and commit the updated lock files. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
 </Project>

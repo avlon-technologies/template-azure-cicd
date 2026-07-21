@@ -107,10 +107,11 @@ On the `prod` environment, additionally configure — these are load-bearing con
 
 `_deploy.yml` runs its deploy job on a **self-hosted runner** so deploys can egress from an IP the App Service deploy surfaces allowlist. Register at least one before your first deploy (Settings → Actions → Runners → New self-hosted runner), and treat it as **privileged infrastructure** — it handles the Azure access token for every environment, including prod:
 
-- The runner machine needs the **Azure CLI (`az`)**, **`curl`**, and **`jq`** on its PATH.
+- The runner machine needs the **Azure CLI (`az`)**, **GitHub CLI (`gh`)**, **`curl`**, and **`jq`** on its PATH (`gh` performs the pre-deploy artifact attestation verification).
 - **Dedicate it to this repository** (repo-level runner, or an org runner group restricted to this repo). Never share it with repos you trust less.
 - Prefer **ephemeral runners** (`--ephemeral`, one job per registration) or an image-per-job setup so no workspace or credential state survives a job. The pipeline defensively cleans its artifact directory, but ephemerality is the real control.
 - It must be able to reach the App Service deploy endpoints and the smoke-test URLs (`GATEWAY_URL` or the default hostnames).
+- **Running more than one runner?** Give each environment's runner a distinct label and pin deploys to it via `_deploy.yml`'s `runner-labels` input (e.g. pass `'["self-hosted", "prod-deploy"]'` from `on-main.yml`) so prod deploys only ever run on isolated prod runners. The default (`'["self-hosted"]'`) matches any self-hosted runner.
 
 If your App Services are reachable from the public internet and you don't need the allowlist model, you can instead change `runs-on` in `_deploy.yml` back to `ubuntu-latest` — see [customization](customization.md#2-workflow-values).
 
@@ -136,8 +137,8 @@ Settings → Rules → Rulesets. These enforce the quality gates the pipeline as
 
 | Ruleset target | Rules |
 |---|---|
-| `develop` | Require a pull request; require the **build / Build & Test** status check |
-| `main` | Require a pull request; require **build / Build & Test** and **Guard main source branch** checks; **allow merge commits only** (disable squash and rebase) |
+| `develop` | Require a pull request; require the **build / Build & Test** status check. Recommended additional required checks once they've run once: **Verify formatting**, **Test workflow scripts**, **Analyze C#** (CodeQL) |
+| `main` | Require a pull request; require **build / Build & Test** and **Guard main source branch** checks; **allow merge commits only** (disable squash and rebase). Same recommended additions as `develop` |
 
 Merge-commit-only on `main` is load-bearing: the prod pipeline reads the release version from the default merge commit subject (`Merge pull request #N from …/release/X.Y.Z`). A squashed or reworded merge fails the prod run by design rather than shipping an untraceable build.
 

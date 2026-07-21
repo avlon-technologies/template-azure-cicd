@@ -29,6 +29,17 @@ on:
         type: number
         required: false
         default: 1
+      attest:
+        description: >
+          Sign a build-provenance attestation for the artifact manifest and
+          generate an SBOM. Every deployable build sets this (entry
+          workflows); PR validation builds don't — attesting needs
+          id-token/attestations permissions that fork PRs cannot be
+          granted. _deploy.yml refuses artifacts without an attested
+          manifest.
+        type: boolean
+        required: false
+        default: false
     outputs:
       build-label:
         description: Resolved build label used for assembly version and deployment tag
@@ -41,10 +52,12 @@ jobs:
     timeout-minutes: 15
     outputs:
       build-label: ${{ steps.set-label.outputs.value }}
-    permissions:
-      contents: read
-      checks: write
-      pull-requests: write
+    # No permissions block: the job inherits exactly what the caller grants
+    # (a called workflow can never exceed it). Callers grant contents: read,
+    # checks: write, pull-requests: write — plus id-token: write and
+    # attestations: write when they set attest: true. Declaring the union
+    # here instead would break fork PRs, which can never be granted
+    # id-token: write.
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -71,12 +84,17 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
       - name: Restore
-        run: dotnet restore ${{ inputs.solution }}
+        # --locked-mode: the committed packages.lock.json files are the
+        # dependency source of truth — a resolution that differs from them
+        # (new transitive version, tampered feed) fails here instead of
+        # silently entering the artifact. After changing a PackageReference,
+        # run `dotnet restore` locally and commit the updated lock files.
+        run: dotnet restore ${{ inputs.solution }} --locked-mode
 
       - name: Build
         # InformationalVersion must be set at build time — the assembly
@@ -101,6 +119,7 @@ jobs:
           --configuration Release
           --no-build
           --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
           --results-directory ./TestResults
         continue-on-error: true
 
@@ -130,6 +149,35 @@ jobs:
           --configuration Release
           --no-build
           --output ./publish
+
+      - name: Write artifact manifest
+        # SHA256SUMS covers every published file and ships inside the
+        # artifact. The attestation below signs the manifest, so verifying
+        # the manifest's attestation + re-hashing the files proves the
+        # deployed bytes are the bytes this workflow built (_deploy.yml
+        # does both before every deploy).
+        run: |
+          cd publish
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          echo "Manifest covers $(wc -l < SHA256SUMS) files."
+
+      - name: Attest build provenance
+        if: inputs.attest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: publish/SHA256SUMS
+
+      - name: Generate SBOM
+        # Software bill of materials for the published output, uploaded as
+        # a companion artifact (<artifact-name>.sbom). Deployable builds
+        # only — PR builds are throwaway.
+        if: inputs.attest
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: ./publish
+          format: spdx-json
+          artifact-name: ${{ inputs.artifact-name }}.sbom.spdx.json
+          upload-artifact-retention: ${{ inputs.retention-days }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
