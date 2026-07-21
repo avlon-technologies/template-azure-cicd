@@ -41,7 +41,7 @@ sequenceDiagram
 | Token subject | Determines the `sub` claim (includes the GitHub environment) | `environment: <env>` on the deploy job in `_deploy.yml` |
 | Identity | The service principal the job authenticates as | User-assigned managed identities `mi-github-cicd-demo-{dev,stg,prod}-cc`, each in its environment's resource group |
 | Trust rule | Which JWTs Entra ID will accept | A federated credential on each managed identity, matching one repo + environment |
-| Permissions | What the identity may do | RBAC role (Website Contributor) scoped to that environment's resource group |
+| Permissions | What the identity may do | RBAC roles: Container Apps Contributor on that environment's resource group; Tasks Contributor + AcrPull on the shared registry |
 | Addressing | Which identity/tenant/subscription to target | `azure-client-id` input + `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` repo variables |
 
 Each environment has its own managed identity scoped to its own resource group — a dev deploy cannot affect prod resources.

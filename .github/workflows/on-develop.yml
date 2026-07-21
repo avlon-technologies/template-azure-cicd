@@ -74,15 +74,26 @@ jobs:
       version: ${{ needs.prepare.outputs.build-label }}
       attest: true
 
-  deploy:
+  image:
     needs: [prepare, build]
     permissions:
       id-token: write
+      contents: read
+      attestations: write
+    uses: ./.github/workflows/_image.yml
+    with:
+      environment: dev
+      build-label: ${{ needs.build.outputs.build-label }}
+
+  deploy:
+    needs: [prepare, build, image]
+    permissions:
+      id-token: write
       contents: write
-      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: dev
       build-label: ${{ needs.build.outputs.build-label }}
+      image-digest: ${{ needs.image.outputs.image-digest }}
       # No tag-deployment: dev deploys are disposable; the Deployments view
       # and run history are the record.
