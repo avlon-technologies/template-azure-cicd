@@ -10,6 +10,7 @@ on:
 jobs:
   show-token:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # Same environment the real dev deploys use, so the subject claim matches.
     environment: dev
     permissions:

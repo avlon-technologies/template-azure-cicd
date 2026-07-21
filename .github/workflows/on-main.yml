@@ -26,6 +26,7 @@ jobs:
   prepare:
     name: Resolve version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.value }}
       source-branch: ${{ steps.version.outputs.branch }}
@@ -141,14 +142,43 @@ jobs:
           fi
           echo "Staging verified: $STG_TAG points at $RELEASE_SHA."
 
+          # Provenance check: artifact *names* are forgeable — any workflow
+          # in the repo can upload one called webapp-<sha>. Promote only an
+          # artifact whose producing run was one of the stg pipelines
+          # building this exact commit. If artifacts exist but none
+          # verifies, fail hard: this is prod, and "newest artifact wins"
+          # must never ship bytes the release pipelines didn't build.
           NAME="webapp-$RELEASE_SHA"
-          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          RUN_ID=""
+          SEEN=0
+          for CANDIDATE in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id'); do
+            SEEN=1
+            read -r RUN_PATH RUN_EVENT RUN_SHA < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE" \
+              --jq '"\(.path) \(.event) \(.head_sha)"')
+            case "$RUN_PATH" in
+              .github/workflows/on-release.yml|.github/workflows/on-hotfix.yml|.github/workflows/on-support.yml) ;;
+              *) echo "::warning::Ignoring artifact from run $CANDIDATE — produced by untrusted workflow '$RUN_PATH'."; continue ;;
+            esac
+            if [ "$RUN_SHA" != "$RELEASE_SHA" ]; then
+              echo "::warning::Ignoring artifact from run $CANDIDATE — built from $RUN_SHA, not $RELEASE_SHA."
+              continue
+            fi
+            if [ "$RUN_EVENT" != "push" ] && [ "$RUN_EVENT" != "workflow_dispatch" ]; then
+              echo "::warning::Ignoring artifact from run $CANDIDATE — unexpected trigger '$RUN_EVENT'."
+              continue
+            fi
+            RUN_ID="$CANDIDATE"
+            break
+          done
           if [ -n "$RUN_ID" ]; then
-            echo "Promoting artifact $NAME from run $RUN_ID — build will be skipped."
+            echo "Promoting artifact $NAME from run $RUN_ID (provenance verified) — build will be skipped."
             echo "artifact=$NAME" >> $GITHUB_OUTPUT
             echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
             echo "sha=$RELEASE_SHA" >> $GITHUB_OUTPUT
+          elif [ "$SEEN" = "1" ]; then
+            echo "::error::Artifact(s) named $NAME exist, but none was produced by a release/hotfix/support pipeline run building $RELEASE_SHA. Refusing to promote unverifiable bytes to prod. Review the warnings above for which runs uploaded them (possible tampering), then re-dispatch the release pipeline on the source branch to stage a fresh candidate."
+            exit 1
           else
             echo "::error::No unexpired stg-tested artifact for $RELEASE_SHA — the candidate was never dispatched to stg for v$VERSION, or it passed the 90-day retention window. Dispatch the release/hotfix/support pipeline on the source branch (e.g. gh workflow run on-release.yml --ref release/$VERSION), verify staging, then re-run this workflow."
             exit 1
@@ -196,6 +226,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.prepare.outputs.version != '' && github.event_name == 'push' }}
     needs: [prepare, deploy]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:
@@ -225,6 +256,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && github.event_name == 'push' && needs.prepare.outputs.source-branch != '' }}
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write

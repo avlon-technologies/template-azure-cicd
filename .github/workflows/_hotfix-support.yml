@@ -24,6 +24,7 @@ jobs:
   prepare:
     name: Resolve version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       # When an existing artifact is reused, its stamped label (from the
       # promote step) wins over the freshly derived one — the binary is the
@@ -60,6 +61,14 @@ jobs:
             exit 1
           fi
           BRANCH_VERSION="${REF#${BRANCH_TYPE}/}"
+          # The prod pipeline can only detect and promote semantic versions
+          # (on-main.yml parses X.Y.Z from the merge commit subject) —
+          # reject other shapes here, before a candidate is built and
+          # staged, not after the merge to main.
+          if [[ ! "$BRANCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::${BRANCH_TYPE^} branch version must be X.Y.Z (got '$BRANCH_VERSION' from '$REF'). Rename the branch, e.g. $BRANCH_TYPE/1.2.1."
+            exit 1
+          fi
           SUFFIX=$([[ "$BRANCH_TYPE" == "hotfix" ]] && echo "hotfix" || echo "patch")
           HEIGHT=$(git rev-list --count HEAD)
           VALUE="$BRANCH_VERSION-$SUFFIX.$HEIGHT"
@@ -86,12 +95,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha }}
           DERIVED: ${{ steps.version.outputs.value }}
+          BRANCH_TYPE: ${{ inputs.branch-type }}
         run: |
+          # Provenance check: artifact *names* are forgeable — any workflow
+          # in the repo can upload one called webapp-<sha>. Reuse only an
+          # artifact whose producing run was this branch type's entry
+          # workflow building this exact commit; anything else is ignored.
+          # Falling through to a rebuild is always safe (same commit
+          # derives the same label).
           NAME="webapp-$SHA"
-          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          TRUSTED_WORKFLOW=".github/workflows/on-${BRANCH_TYPE}.yml"
+          RUN_ID=""
+          for CANDIDATE in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id'); do
+            read -r RUN_PATH RUN_EVENT RUN_SHA < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE" \
+              --jq '"\(.path) \(.event) \(.head_sha)"')
+            if [ "$RUN_PATH" = "$TRUSTED_WORKFLOW" ] \
+               && [ "$RUN_SHA" = "$SHA" ] \
+               && { [ "$RUN_EVENT" = "push" ] || [ "$RUN_EVENT" = "workflow_dispatch" ]; }; then
+              RUN_ID="$CANDIDATE"
+              break
+            fi
+            echo "::warning::Ignoring artifact $NAME from run $CANDIDATE ('$RUN_PATH', $RUN_EVENT, $RUN_SHA) — not produced by this pipeline building this commit."
+          done
           if [ -z "$RUN_ID" ]; then
-            echo "No existing artifact for $SHA (push build expired or predates this commit) — will build."
+            echo "No trusted existing artifact for $SHA (push build expired, predates this commit, or failed the provenance check) — will build."
             exit 0
           fi
           # The build uploads a marker artifact whose name carries the label

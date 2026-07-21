@@ -21,6 +21,7 @@ jobs:
   prepare:
     name: Validate build label
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       build-label: ${{ steps.validate.outputs.build-label }}
     steps:

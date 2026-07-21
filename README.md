@@ -21,7 +21,7 @@ This template answers all of them with plain GitHub Actions workflows you can re
 ## Key features
 
 - **Environment promotion** — dev (automatic on merge), stg (manually dispatched release candidates), prod (automatic on release merge), each mapped to its own Azure App Service and GitHub environment.
-- **Build once, promote many** — release-candidate builds are stored as commit-keyed artifacts (90-day retention). Merging to `main` promotes the exact stg-tested binary; the pipeline **refuses to rebuild untested source for prod**.
+- **Build once, promote many** — release-candidate builds are stored as commit-keyed artifacts (90-day retention). Merging to `main` promotes the exact stg-tested binary; the pipeline **refuses to rebuild untested source for prod**, and **verifies the artifact's provenance** (which workflow run produced it, from which commit) before reusing or promoting it — an artifact merely *named* right is rejected.
 - **Verified deploys** — every deploy ends with a smoke test that asserts both the health endpoint *and* that the app reports the intended build label (stamped into the assembly at build time, exposed via OpenAPI).
 - **Blue/green production deploys** — the artifact lands in a staging slot, is smoke-tested there, then swapped into production. A failed post-swap smoke test automatically swaps the previous build back.
 - **Secretless Azure auth** — OIDC workload identity federation with one scoped deploy identity per environment. There are no repository secrets at all.
@@ -93,6 +93,7 @@ Hotfix (`hotfix/*`) and support (`support/*`) branches follow the same stg-then-
 
 - An Azure subscription, with permission to create resource groups, App Services, user-assigned managed identities, and role assignments
 - A GitHub repository (Actions enabled) where you have admin access — rulesets, environments, and Actions settings must be configured
+- A machine to host the **self-hosted deploy runner** (deploy jobs run on it; builds stay on GitHub-hosted runners) — see [getting-started](docs/getting-started.md#self-hosted-deploy-runner)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`) for identity setup; [GitHub CLI](https://cli.github.com/) (`gh`) is optional but used throughout the docs
 - Provisioned Azure infrastructure — one App Service per environment (prod on a plan that supports deployment slots). The reference deployment provisions this with Terraform in the platform repo `avlon-technologies/infrastructure` (module `infra/modules/cicd-demo/`); any provisioning method works as long as the [required resources](docs/getting-started.md#step-2--provision-azure-resources) exist.
 
@@ -145,8 +146,12 @@ Settings → Environments — create `dev`, `stg`, and `prod`, each with:
 | `AZURE_CLIENT_ID` | Client ID of that environment's deploy managed identity |
 | `WEBAPP_NAME` | That environment's App Service name |
 | `RESOURCE_GROUP` | That environment's resource-group name (used by the slot-swap steps) |
+| `GATEWAY_URL` | *(optional)* URL the post-deploy smoke test uses instead of the app hostname (gateway-only ingress) |
+| `DEPLOY_ALERT_WEBHOOK` | *(optional)* Chat webhook that failed deploys are pushed to |
 
-The deploy job's `environment:` declaration scopes these variables, so the entry workflows carry no per-environment configuration. Optionally add required reviewers on `prod` for a manual approval gate before production deploys.
+The deploy job's `environment:` declaration scopes these variables, so the entry workflows carry no per-environment configuration. On `prod`, additionally configure **required reviewers** and a **deployment branch policy (`main` only)** — the human approval gate and branch restriction on production deploys are part of the security model, not optional hardening.
+
+Deploy jobs run on a **self-hosted runner** (`runs-on: [self-hosted]` in `_deploy.yml`) so deploys egress from an IP the App Service deploy surfaces can allowlist — register one before your first deploy ([setup and hardening guidance](docs/getting-started.md#self-hosted-deploy-runner)). Build and PR jobs stay on GitHub-hosted runners.
 
 ### Repository settings
 
@@ -171,7 +176,7 @@ Two reusable workflows (prefixed `_`) implement the mechanisms; branch-triggered
 | `on-hotfix.yml` / `on-support.yml` | Push to `hotfix/**` / `support/**`; manual dispatch | Same dispatch-gated stg pattern, for branches cut from `main` |
 | `on-main.yml` | Push to `main`; manual dispatch | Promote the stg-tested artifact to **prod** (blue/green), tag, create the GitHub Release, open the back-merge PR. Dispatch input `version` redeploys/rolls back to any released version within artifact retention |
 | `_build.yml` | Called | Restore, build (stamping the label into `InformationalVersion`), test (published as a PR check), publish, upload artifact |
-| `_deploy.yml` | Called | Download artifact, OIDC login, deploy (direct or slot→smoke→swap), smoke-test, write run summary, tag the deployment |
+| `_deploy.yml` | Called | Download artifact, OIDC login, deploy (direct or slot→smoke→swap), smoke-test, write run summary, tag the deployment. Runs on the self-hosted deploy runner; notifies `DEPLOY_ALERT_WEBHOOK` on failure if set |
 | `show-oidc-token.yml` | Manual dispatch | Prints the decoded OIDC token claims for learning/debugging (minted with a non-Azure audience, so it can't be exchanged for access) |
 
 Deploys to the same environment serialize via concurrency groups (`deploy-dev` / `deploy-stg` / `deploy-prod`); superseded PR builds are cancelled.

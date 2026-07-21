@@ -1,0 +1,8 @@
+# The workflows are this template's product — changes to anything under
+# .github/ (workflows, Dependabot config, this file) require review by the
+# pipeline owners. Pair with a ruleset/branch protection that enforces
+# code-owner review for the control to have teeth.
+#
+# When adopting the template, replace the owner below with your team,
+# e.g. @your-org/platform-team.
+/.github/ @mikekangdev

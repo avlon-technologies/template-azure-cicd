@@ -21,7 +21,9 @@ The pipeline's one hard contract with the application is worth understanding fir
 | What | Where | Notes |
 |---|---|---|
 | Resource-group name | Each GitHub environment's `RESOURCE_GROUP` variable — read by the slot-swap and swap-back steps in `_deploy.yml` | No workflow edit needed; set the variable per environment. Only exercised when `slot-swap: true` (prod), but set it in every environment for consistency |
-| Smoke-test hostnames | `_deploy.yml`: `https://${{ vars.WEBAPP_NAME }}.azurewebsites.net` and `…-staging.azurewebsites.net` | Assumes default App Service hostnames. Using a custom domain, a different slot name, or private networking? Update these URLs — and remember GitHub-hosted runners must be able to reach them |
+| Smoke-test hostnames | `_deploy.yml`: `https://${{ vars.WEBAPP_NAME }}.azurewebsites.net` and `…-staging.azurewebsites.net` | Assumes default App Service hostnames; the post-deploy smoke test prefers the environment's `GATEWAY_URL` variable when set (for gateway-only ingress). Using a custom domain or a different slot name? Update these URLs — and remember the **self-hosted deploy runner** must be able to reach them |
+| Deploy runner | `_deploy.yml` (`runs-on: [self-hosted]`) | Deploy jobs need a registered self-hosted runner with `az`, `curl`, `jq` ([setup](getting-started.md#self-hosted-deploy-runner)). If your App Services are publicly reachable and you don't use the IP-allowlist model, switching back to `ubuntu-latest` is a one-line change |
+| Failure notifications | `DEPLOY_ALERT_WEBHOOK` environment/repo variable, read by `_deploy.yml` | Optional — Slack/Teams-style `{"text": …}` webhook that failed deploys are pushed to. Unset = no notification |
 | Slot name | `_deploy.yml` (`slot-name: staging`, plus the swap/swap-back commands and the `-staging` hostname) | `staging` is assumed throughout; rename in all places or keep it |
 | Artifact name prefix | `webapp-publish` / `webapp-<sha>` in `_build.yml` defaults, `on-release.yml`, `on-main.yml`, `_hotfix-support.yml` | Cosmetic; safe to keep |
 | Branch names | Workflow `on.push.branches` triggers, `on-pr.yml` guard, `on-main.yml` version regex (`release|hotfix|support`) | Only if your branch model differs. The version-detection regex and the ruleset configuration must stay in agreement with the triggers |
@@ -62,6 +64,7 @@ Covered step-by-step in [getting-started.md](getting-started.md#step-4--configur
 - Repo variables `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` point at *your* tenant/subscription
 - Rulesets name the same required checks (`build / Build & Test`, `Guard main source branch`) — if you rename the `_build.yml` job or the guard job, the ruleset check names must follow
 - Version labels are restricted to letters, digits, `.` and `-` (they become artifact names and git tags) — keep that in mind if you script label generation
+- Release, hotfix, and support branch versions must be exactly `X.Y.Z` (e.g. `release/1.2.0`) — enforced by the PR guard and the stg pipelines because the prod pipeline parses that shape from the merge commit subject; milestone branches are exempt (they never promote to prod)
 
 ## 6. Documentation
 
