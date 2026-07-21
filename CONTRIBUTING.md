@@ -27,6 +27,7 @@ These are deliberate, load-bearing patterns — PRs that break them will be aske
 - **Workflow inputs pass to scripts via `env:`**, never interpolated directly into `run:` script bodies (shell/JS injection safety).
 - **Least-privilege permissions:** the default token is read-only; every job declares exactly what it needs. Callers of reusable workflows must grant the union of what the called jobs request.
 - **Jobs downstream of a skippable job** need explicit `if: ${{ !failure() && !cancelled() }}` — the implicit `success()` is false when any ancestor was skipped, and the prod promotion path skips `build` by design.
+- **Workflow bash is tested.** Shared scripts in `.github/scripts/` have `*.test.sh` suites, and step scripts embedded in workflows are covered by extraction-based suites (`test-lib.sh`'s `extract_step` pulls the `run:` block out of the YAML at test time, so coverage can't drift from the real code). If you change pipeline bash, extend the relevant suite and run them all locally: `for t in .github/scripts/*.test.sh; do bash "$t"; done`. Every PR also runs actionlint (+ shellcheck) over the workflows.
 - **`public partial class Program { }`** at the end of `Api/Program.cs` stays — the integration tests need it.
 - Docs live in `docs/` following the C4 structure; if you change pipeline behavior, update the [operations manual](docs/operations-manual.md) and the relevant C4 document in the same PR.
 
