@@ -125,6 +125,33 @@ jobs:
           echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
           echo "Deploying $IMAGE to $APP ($RG)"
 
+      - name: Verify image attestation
+        # Cryptographic defense-in-depth behind the provenance-verified
+        # digest markers: the digest being deployed must carry a
+        # GitHub-signed build-provenance attestation from this repo's
+        # _image.yml. A digest that was never attested — or attested by
+        # anything else — fails before any az containerapp call runs.
+        # Registry auth for gh's registry client: an ACR access token via
+        # the deploy identity (AcrPull), wired into a throwaway docker
+        # config — no docker CLI involved. Needs gh on the runner
+        # (github-runner image ≥ 1.4.0).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACR: ${{ vars.ACR_NAME }}
+          DIGEST: ${{ inputs.image-digest }}
+        run: |
+          TOKEN=$(az acr login --name "$ACR" --expose-token --output tsv --query accessToken)
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-attest"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '{"auths":{"%s.azurecr.io":{"auth":"%s"}}}' "$ACR" \
+            "$(printf '00000000-0000-0000-0000-000000000000:%s' "$TOKEN" | base64 -w0)" \
+            > "$DOCKER_CONFIG/config.json"
+          gh attestation verify "oci://$ACR.azurecr.io/cicd-demo/api@$DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/_image.yml"
+          rm -rf "$DOCKER_CONFIG"
+          echo "Attestation verified: $DIGEST was built by _image.yml in $GITHUB_REPOSITORY."
+
       - name: Update container app
         if: ${{ !inputs.traffic-shift }}
         env:

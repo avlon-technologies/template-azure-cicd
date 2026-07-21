@@ -114,7 +114,7 @@ On the `prod` environment, additionally configure — these are load-bearing con
 
 `_deploy.yml` runs its deploy job on a **self-hosted runner** so deploys can egress from an IP the App Service deploy surfaces allowlist. Register at least one before your first deploy (Settings → Actions → Runners → New self-hosted runner), and treat it as **privileged infrastructure** — it handles the Azure access token for every environment, including prod:
 
-- The runner machine needs the **Azure CLI (`az`)**, **`curl`**, and **`jq`** on its PATH.
+- The runner machine needs the **Azure CLI (`az`)**, **GitHub CLI (`gh`)**, **`curl`**, and **`jq`** on its PATH (`gh` performs the pre-deploy image attestation verification).
 - **Dedicate it to this repository** (repo-level runner, or an org runner group restricted to this repo). Never share it with repos you trust less.
 - Prefer **ephemeral runners** (`--ephemeral`, one job per registration) or an image-per-job setup so no workspace or credential state survives a job. The pipeline defensively cleans its artifact directory, but ephemerality is the real control.
 - It must be able to reach the App Service deploy endpoints and the smoke-test URLs (`GATEWAY_URL` or the default hostnames).
