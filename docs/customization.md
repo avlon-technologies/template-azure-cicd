@@ -27,6 +27,7 @@ The pipeline's one hard contract with the application is worth understanding fir
 | Slot name | `_deploy.yml` (`slot-name: staging`, plus the swap/swap-back commands and the `-staging` hostname) | `staging` is assumed throughout; rename in all places or keep it |
 | Artifact name prefix | `webapp-publish` / `webapp-<sha>` in `_build.yml` defaults, `on-release.yml`, `on-main.yml`, `_hotfix-support.yml` | Cosmetic; safe to keep |
 | Branch names | Workflow `on.push.branches` triggers, `on-pr.yml` guard, `on-main.yml` version regex (`release|hotfix|support`) | Only if your branch model differs. The version-detection regex and the ruleset configuration must stay in agreement with the triggers |
+| Trusted artifact producers | The workflow paths passed to `find_verified_artifact` in `on-main.yml`, `on-release.yml`, and `_hotfix-support.yml` (shared logic: `.github/scripts/find-verified-artifact.sh`) | **Renaming or adding an stg entry workflow must update these lists** — the provenance check refuses artifacts from unlisted workflows (prod fails loudly; stg falls back to a rebuild). Deliberately hardcoded in reviewed workflow code, never a repo variable: a mutable setting would let anyone with variables-write extend the trust boundary |
 | Concurrency groups | `deploy-dev` / `deploy-stg` / `deploy-prod` in the entry workflows | Keep — they serialize deploys per environment |
 
 ## 3. The smoke-test contract

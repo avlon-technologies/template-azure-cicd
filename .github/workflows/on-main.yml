@@ -34,6 +34,10 @@ jobs:
       promote-run-id: ${{ steps.promote.outputs.run-id }}
       promote-sha: ${{ steps.promote.outputs.sha }}
     steps:
+      # Needed for .github/scripts/find-verified-artifact.sh (the shared
+      # provenance check sourced by the promote step below).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Validate dispatch
         if: ${{ github.event_name == 'workflow_dispatch' }}
         # The dispatch branch dropdown cannot be restricted in the GitHub UI,
@@ -145,38 +149,22 @@ jobs:
           # Provenance check: artifact *names* are forgeable — any workflow
           # in the repo can upload one called webapp-<sha>. Promote only an
           # artifact whose producing run was one of the stg pipelines
-          # building this exact commit. If artifacts exist but none
-          # verifies, fail hard: this is prod, and "newest artifact wins"
-          # must never ship bytes the release pipelines didn't build.
+          # building this exact commit (shared, tested logic:
+          # .github/scripts/find-verified-artifact.sh — keep the trusted
+          # list in sync with entry-workflow renames, see customization.md
+          # §2). If artifacts exist but none verifies, fail hard: this is
+          # prod, and "newest artifact wins" must never ship bytes the
+          # release pipelines didn't build.
           NAME="webapp-$RELEASE_SHA"
-          RUN_ID=""
-          SEEN=0
-          for CANDIDATE in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id'); do
-            SEEN=1
-            read -r RUN_PATH RUN_EVENT RUN_SHA < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE" \
-              --jq '"\(.path) \(.event) \(.head_sha)"')
-            case "$RUN_PATH" in
-              .github/workflows/on-release.yml|.github/workflows/on-hotfix.yml|.github/workflows/on-support.yml) ;;
-              *) echo "::warning::Ignoring artifact from run $CANDIDATE — produced by untrusted workflow '$RUN_PATH'."; continue ;;
-            esac
-            if [ "$RUN_SHA" != "$RELEASE_SHA" ]; then
-              echo "::warning::Ignoring artifact from run $CANDIDATE — built from $RUN_SHA, not $RELEASE_SHA."
-              continue
-            fi
-            if [ "$RUN_EVENT" != "push" ] && [ "$RUN_EVENT" != "workflow_dispatch" ]; then
-              echo "::warning::Ignoring artifact from run $CANDIDATE — unexpected trigger '$RUN_EVENT'."
-              continue
-            fi
-            RUN_ID="$CANDIDATE"
-            break
-          done
-          if [ -n "$RUN_ID" ]; then
-            echo "Promoting artifact $NAME from run $RUN_ID (provenance verified) — build will be skipped."
+          source .github/scripts/find-verified-artifact.sh
+          find_verified_artifact "$NAME" "$RELEASE_SHA" \
+            ".github/workflows/on-release.yml .github/workflows/on-hotfix.yml .github/workflows/on-support.yml"
+          if [ -n "$FVA_RUN_ID" ]; then
+            echo "Promoting artifact $NAME from run $FVA_RUN_ID (provenance verified) — build will be skipped."
             echo "artifact=$NAME" >> $GITHUB_OUTPUT
-            echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
+            echo "run-id=$FVA_RUN_ID" >> $GITHUB_OUTPUT
             echo "sha=$RELEASE_SHA" >> $GITHUB_OUTPUT
-          elif [ "$SEEN" = "1" ]; then
+          elif [ "$FVA_ARTIFACTS_FOUND" = "true" ]; then
             echo "::error::Artifact(s) named $NAME exist, but none was produced by a release/hotfix/support pipeline run building $RELEASE_SHA. Refusing to promote unverifiable bytes to prod. Review the warnings above for which runs uploaded them (possible tampering), then re-dispatch the release pipeline on the source branch to stage a fresh candidate."
             exit 1
           else

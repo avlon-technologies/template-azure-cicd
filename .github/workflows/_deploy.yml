@@ -253,13 +253,20 @@ jobs:
         # (Slack/Teams-style). Without it a failed deploy — including an
         # executed auto-swap-back, which is a prod incident — is visible
         # only to whoever watches the Actions tab.
-        if: ${{ failure() && vars.DEPLOY_ALERT_WEBHOOK != '' }}
+        # cancelled() is load-bearing: a job killed by timeout-minutes (the
+        # hung-deploy case) reports *cancelled*, not failed — failure()
+        # alone would skip the alert in exactly the scenario the timeout
+        # exists for. GitHub still runs condition-matching steps during
+        # cancellation teardown. Manual cancellations alert too, which is
+        # correct for a deploy job (concurrency never auto-cancels these).
+        if: ${{ (failure() || cancelled()) && vars.DEPLOY_ALERT_WEBHOOK != '' }}
         env:
           WEBHOOK: ${{ vars.DEPLOY_ALERT_WEBHOOK }}
           ENVIRONMENT: ${{ inputs.environment }}
           BUILD_LABEL: ${{ inputs.build-label }}
+          STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          jq -n --arg text "🚨 Deploy of $BUILD_LABEL to $ENVIRONMENT failed: $RUN_URL" '{text: $text}' \
+          jq -n --arg text "🚨 Deploy of $BUILD_LABEL to $ENVIRONMENT did not succeed (status: $STATUS): $RUN_URL" '{text: $text}' \
             | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$WEBHOOK" \
             || echo "::warning::Could not deliver the failure notification to DEPLOY_ALERT_WEBHOOK."

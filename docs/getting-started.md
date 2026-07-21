@@ -94,7 +94,7 @@ Settings → Environments → create `dev`, `stg`, and `prod`. In each, add **en
 | `WEBAPP_NAME` | That environment's App Service name (Step 2) |
 | `RESOURCE_GROUP` | That environment's resource-group name (Step 2) — used by the slot-swap steps in `_deploy.yml` |
 | `GATEWAY_URL` | *(optional)* Public URL the post-deploy smoke test should use instead of `https://<WEBAPP_NAME>.azurewebsites.net` — set it when the app's main site only admits a gateway/allowlisted ingress |
-| `DEPLOY_ALERT_WEBHOOK` | *(optional)* Chat webhook (Slack/Teams-style `{"text": …}` payload) that failed deploys are pushed to |
+| `DEPLOY_ALERT_WEBHOOK` | *(optional)* Chat webhook (Slack/Teams-style `{"text": …}` payload) that failed deploys are pushed to. Stored as a variable (unmasked) by accepted trade-off — see [SECURITY.md](../SECURITY.md#known-trade-offs-to-review-when-adopting) |
 
 On the `prod` environment, additionally configure — these are load-bearing controls the pipeline's security model assumes, not optional hardening:
 

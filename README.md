@@ -63,6 +63,8 @@ Hotfix (`hotfix/*`) and support (`support/*`) branches follow the same stg-then-
 │   │   ├── on-support.yml       # support/** → stg (deploy is dispatch-gated)
 │   │   ├── on-main.yml          # main → prod (artifact promotion, blue/green, release, back-merge)
 │   │   └── show-oidc-token.yml  # Educational: inspect the OIDC JWT GitHub mints for a job
+│   ├── scripts/                 # Shared bash sourced by workflows (artifact provenance check) + tests
+│   ├── CODEOWNERS               # Pipeline changes require owner review
 │   └── dependabot.yml           # Weekly NuGet + Actions SHA-pin updates
 ├── Api/                         # Sample .NET 10 minimal API (replace with your app)
 ├── Api.Test/                    # xUnit integration tests (WebApplicationFactory)

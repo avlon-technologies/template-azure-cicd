@@ -22,6 +22,19 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/_build.yml
 
+  workflow-scripts:
+    name: Test workflow scripts
+    # Regression tests for the bash the workflows source — most importantly
+    # the artifact provenance check (the promotion path's security control).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Run provenance-check tests
+        run: bash .github/scripts/find-verified-artifact.test.sh
+
   guard-main-source:
     name: Guard main source branch
     # main receives code only through release/* or hotfix/* branches — features

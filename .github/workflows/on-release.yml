@@ -103,22 +103,14 @@ jobs:
           # Provenance check: artifact *names* are forgeable — any workflow
           # in the repo can upload one called webapp-<sha>. Reuse only an
           # artifact whose producing run was this workflow building this
-          # exact commit; anything else is ignored. Falling through to a
-          # rebuild is always safe (same commit derives the same label).
+          # exact commit (shared, tested logic:
+          # .github/scripts/find-verified-artifact.sh); anything else is
+          # ignored. Falling through to a rebuild is always safe (same
+          # commit derives the same label).
           NAME="webapp-$GITHUB_SHA"
-          RUN_ID=""
-          for CANDIDATE in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id'); do
-            read -r RUN_PATH RUN_EVENT RUN_SHA < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE" \
-              --jq '"\(.path) \(.event) \(.head_sha)"')
-            if [ "$RUN_PATH" = ".github/workflows/on-release.yml" ] \
-               && [ "$RUN_SHA" = "$GITHUB_SHA" ] \
-               && { [ "$RUN_EVENT" = "push" ] || [ "$RUN_EVENT" = "workflow_dispatch" ]; }; then
-              RUN_ID="$CANDIDATE"
-              break
-            fi
-            echo "::warning::Ignoring artifact $NAME from run $CANDIDATE ('$RUN_PATH', $RUN_EVENT, $RUN_SHA) — not produced by this pipeline building this commit."
-          done
+          source .github/scripts/find-verified-artifact.sh
+          find_verified_artifact "$NAME" "$GITHUB_SHA" ".github/workflows/on-release.yml"
+          RUN_ID="$FVA_RUN_ID"
           if [ -z "$RUN_ID" ]; then
             echo "No trusted existing artifact for $GITHUB_SHA (push build expired, predates this commit, or failed the provenance check) — will build."
             exit 0
