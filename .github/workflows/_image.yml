@@ -94,7 +94,10 @@ jobs:
           ACR: ${{ vars.ACR_NAME }}
           SHA: ${{ github.sha }}
         run: |
-          DIGEST=$(az acr manifest show --registry "$ACR" --name "cicd-demo/api:sha-$SHA" --query digest -o tsv)
+          # az acr repository show --image returns the tag's attributes
+          # (its `az acr manifest show` cousin returns the raw manifest,
+          # which has no digest field — and is a preview command besides).
+          DIGEST=$(az acr repository show --name "$ACR" --image "cicd-demo/api:sha-$SHA" --query digest -o tsv)
           if [ -z "$DIGEST" ]; then
             echo "::error::Could not resolve the digest for cicd-demo/api:sha-$SHA — the acr build did not push?"
             exit 1
