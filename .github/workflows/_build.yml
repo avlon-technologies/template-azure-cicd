@@ -38,6 +38,7 @@ jobs:
   build:
     name: Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       build-label: ${{ steps.set-label.outputs.value }}
     permissions:

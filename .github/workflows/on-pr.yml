@@ -22,19 +22,40 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/_build.yml
 
+  workflow-scripts:
+    name: Test workflow scripts
+    # Regression tests for the bash the workflows source — most importantly
+    # the artifact provenance check (the promotion path's security control).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Run provenance-check tests
+        run: bash .github/scripts/find-verified-artifact.test.sh
+
   guard-main-source:
     name: Guard main source branch
     # main receives code only through release/* or hotfix/* branches — features
     # flow via develop and reach prod through a release. Required check on main.
     if: github.base_ref == 'main'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Enforce release, hotfix, or support source
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          if [[ "$HEAD_REF" == release/* || "$HEAD_REF" == hotfix/* || "$HEAD_REF" == support/* ]]; then
+          # The prefix alone is not enough: the prod pipeline parses X.Y.Z
+          # from the merge commit subject, so a branch like release/1.2
+          # would merge cleanly and then fail the prod run. Enforce the
+          # full shape here, before the merge.
+          if [[ "$HEAD_REF" =~ ^(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Source branch '$HEAD_REF' is allowed into main."
+          elif [[ "$HEAD_REF" == release/* || "$HEAD_REF" == hotfix/* || "$HEAD_REF" == support/* ]]; then
+            echo "::error::Branch '$HEAD_REF' has the right prefix but not an X.Y.Z version — the prod pipeline can only promote semantic versions (e.g. release/1.2.0). Rename the branch and open a new PR."
+            exit 1
           else
             echo "::error::PRs into main must come from a release/*, hotfix/*, or support/* branch, not '$HEAD_REF'. Merge to develop and cut a release instead."
             exit 1

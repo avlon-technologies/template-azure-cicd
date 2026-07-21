@@ -21,6 +21,7 @@ jobs:
   prepare:
     name: Resolve version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       # When an existing artifact is reused, its stamped label (from the
       # promote step) wins over the freshly derived one — the binary is the
@@ -53,6 +54,14 @@ jobs:
           if [[ "$REF" == release/* ]]; then
             BRANCH_KIND=release
             BRANCH_VERSION="${REF#release/}"
+            # The prod pipeline can only detect and promote semantic
+            # versions (on-main.yml parses X.Y.Z from the merge commit
+            # subject) — reject other shapes here, before a candidate is
+            # built and staged, not after the merge to main.
+            if [[ ! "$BRANCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Release branch version must be X.Y.Z (got '$BRANCH_VERSION' from '$REF'). Rename the branch, e.g. release/1.2.0. (Milestone branches are exempt — they never promote to prod.)"
+              exit 1
+            fi
           elif [[ "$REF" == milestone/* ]]; then
             BRANCH_KIND=milestone
             BRANCH_VERSION="${REF#milestone/}"
@@ -91,11 +100,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DERIVED: ${{ steps.version.outputs.value }}
         run: |
+          # Provenance check: artifact *names* are forgeable — any workflow
+          # in the repo can upload one called webapp-<sha>. Reuse only an
+          # artifact whose producing run was this workflow building this
+          # exact commit (shared, tested logic:
+          # .github/scripts/find-verified-artifact.sh); anything else is
+          # ignored. Falling through to a rebuild is always safe (same
+          # commit derives the same label).
           NAME="webapp-$GITHUB_SHA"
-          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          source .github/scripts/find-verified-artifact.sh
+          find_verified_artifact "$NAME" "$GITHUB_SHA" ".github/workflows/on-release.yml"
+          RUN_ID="$FVA_RUN_ID"
           if [ -z "$RUN_ID" ]; then
-            echo "No existing artifact for $GITHUB_SHA (push build expired or predates this commit) — will build."
+            echo "No trusted existing artifact for $GITHUB_SHA (push build expired, predates this commit, or failed the provenance check) — will build."
             exit 0
           fi
           # The build uploads a marker artifact whose name carries the label

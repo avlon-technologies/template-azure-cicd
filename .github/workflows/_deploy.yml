@@ -64,6 +64,9 @@ jobs:
     # GitHub-hosted runners get 403s once the allowlist is on.
     runs-on: [self-hosted]
     environment: ${{ inputs.environment }}
+    # A hung deploy or swap must not hold the environment's concurrency
+    # group (and the shared runner) for GitHub's 6-hour default.
+    timeout-minutes: 30
     permissions:
       id-token: write
       contents: write
@@ -73,6 +76,13 @@ jobs:
       actions: read
 
     steps:
+      - name: Clean workspace
+        # Self-hosted runners reuse their working directory between jobs.
+        # download-artifact does not empty its target, so a leftover
+        # ./publish from a previous deploy would merge into this one's
+        # package — files deleted upstream would resurrect. Start empty.
+        run: rm -rf ./publish
+
       - name: Download artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -236,3 +246,27 @@ jobs:
                 core.setFailed(`${tagRef} already points at ${existing.data.object.sha} but this deploy is ${sha}. Deployment tags are immutable — use a new label.`);
               }
             }
+
+      - name: Notify deploy failure
+        # Opt-in push notification: set DEPLOY_ALERT_WEBHOOK (environment or
+        # repo variable) to a chat webhook accepting a {"text": ...} payload
+        # (Slack/Teams-style). Without it a failed deploy — including an
+        # executed auto-swap-back, which is a prod incident — is visible
+        # only to whoever watches the Actions tab.
+        # cancelled() is load-bearing: a job killed by timeout-minutes (the
+        # hung-deploy case) reports *cancelled*, not failed — failure()
+        # alone would skip the alert in exactly the scenario the timeout
+        # exists for. GitHub still runs condition-matching steps during
+        # cancellation teardown. Manual cancellations alert too, which is
+        # correct for a deploy job (concurrency never auto-cancels these).
+        if: ${{ (failure() || cancelled()) && vars.DEPLOY_ALERT_WEBHOOK != '' }}
+        env:
+          WEBHOOK: ${{ vars.DEPLOY_ALERT_WEBHOOK }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          BUILD_LABEL: ${{ inputs.build-label }}
+          STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n --arg text "🚨 Deploy of $BUILD_LABEL to $ENVIRONMENT did not succeed (status: $STATUS): $RUN_URL" '{text: $text}' \
+            | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$WEBHOOK" \
+            || echo "::warning::Could not deliver the failure notification to DEPLOY_ALERT_WEBHOOK."
