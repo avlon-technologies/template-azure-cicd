@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for _deploy.yml's critical step scripts — digest-shape validation,
-# revision-suffix sanitization, FQDN guard, and the revision staging
-# branches (reuse / collision / not-found / transient error).
+# revision-suffix sanitization, FQDN guard, the revision staging branches
+# (reuse / collision / not-found / transient error), the blue/green
+# traffic pin, and the post-shift rollback.
 #
 # Drift-proof by construction: the scripts under test are extracted from
 # .github/workflows/_deploy.yml itself at test time (no copy to fall out
@@ -33,6 +34,12 @@ case "$cmd" in
     echo "activate" >> "$STUB_LOG" ;;
   *"containerapp update"*)
     echo "update" >> "$STUB_LOG" ;;
+  *"ingress traffic set"*)
+    echo "traffic-set $cmd" >> "$STUB_LOG" ;;
+  *"containerapp show"*"weight=="*)
+    printf '%s\n' "${STUB_CURRENT-}" ;;
+  *"containerapp show"*"latestRevisionName"*)
+    printf '%s\n' "${STUB_LATEST-}" ;;
   *"containerapp show"*)
     printf '%s\n' "${STUB_FQDN-app.example.azurecontainerapps.io}" ;;
   *)
@@ -101,5 +108,35 @@ else
     || note "transient revision-show error fails (not treated as not-found)" no
 fi
 
-rm -f "$TARGET" "$STAGE"
+## Pin traffic to the current revision
+PIN=$(extract_step .github/workflows/_deploy.yml deploy 'Pin traffic to the current revision')
+
+if run_step "$PIN" APP=app RG=rg STUB_CURRENT=app--rev-old; then
+  grep -q "traffic-set .*app--rev-old=100" "$STUB_LOG" && grep -q "previous=app--rev-old" "$STUB/out" \
+    && note "serving revision pinned by name, exported as previous" yes \
+    || note "serving revision pinned by name, exported as previous" no
+else
+  note "serving revision pinned by name, exported as previous" no
+fi
+
+if run_step "$PIN" APP=app RG=rg STUB_CURRENT= STUB_LATEST=app--seed; then
+  grep -q "traffic-set .*app--seed=100" "$STUB_LOG" && grep -q "previous=app--seed" "$STUB/out" \
+    && note "no weight-100 revision: falls back to latestRevisionName (Terraform seed)" yes \
+    || note "no weight-100 revision: falls back to latestRevisionName (Terraform seed)" no
+else
+  note "no weight-100 revision: falls back to latestRevisionName (Terraform seed)" no
+fi
+
+## Shift traffic back after failed post-shift smoke test
+ROLLBACK=$(extract_step .github/workflows/_deploy.yml deploy 'Shift traffic back after failed post-shift smoke test')
+
+if run_step "$ROLLBACK" APP=app RG=rg PREVIOUS=app--rev-old; then
+  grep -q "traffic-set .*app--rev-old=100" "$STUB_LOG" \
+    && note "post-shift rollback restores 100% traffic to the previous revision" yes \
+    || note "post-shift rollback restores 100% traffic to the previous revision" no
+else
+  note "post-shift rollback restores 100% traffic to the previous revision" no
+fi
+
+rm -f "$TARGET" "$STAGE" "$PIN" "$ROLLBACK"
 finish
