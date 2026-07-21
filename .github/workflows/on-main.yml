@@ -33,6 +33,7 @@ jobs:
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
       promote-sha: ${{ steps.promote.outputs.sha }}
+      promote-image-digest: ${{ steps.promote.outputs.image-digest }}
     steps:
       # Needed for .github/scripts/find-verified-artifact.sh (the shared
       # provenance check sourced by the promote step below).
@@ -160,10 +161,22 @@ jobs:
           find_verified_artifact "$NAME" "$RELEASE_SHA" \
             ".github/workflows/on-release.yml .github/workflows/on-hotfix.yml .github/workflows/on-support.yml"
           if [ -n "$FVA_RUN_ID" ]; then
-            echo "Promoting artifact $NAME from run $FVA_RUN_ID (provenance verified) — build will be skipped."
+            # The digest marker from the verified run is the immutable
+            # image prod will pin. Missing marker = the candidate predates
+            # container deploys — prod never falls back, so fail with the
+            # re-staging instruction.
+            DIGEST=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FVA_RUN_ID/artifacts?per_page=100" \
+              --jq ".artifacts[].name | select(startswith(\"$NAME.image.\"))" | head -1)
+            DIGEST="${DIGEST#"$NAME.image."}"
+            if [ -z "$DIGEST" ]; then
+              echo "::error::The stg-tested candidate for $RELEASE_SHA has no image-digest marker (built before container deploys). Re-dispatch the release/hotfix/support pipeline on the source branch to stage a fresh containerized candidate, verify staging, then re-run this workflow."
+              exit 1
+            fi
+            echo "Promoting artifact $NAME (image sha256:$DIGEST) from run $FVA_RUN_ID (provenance verified) — build will be skipped."
             echo "artifact=$NAME" >> $GITHUB_OUTPUT
             echo "run-id=$FVA_RUN_ID" >> $GITHUB_OUTPUT
             echo "sha=$RELEASE_SHA" >> $GITHUB_OUTPUT
+            echo "image-digest=sha256:$DIGEST" >> $GITHUB_OUTPUT
           elif [ "$FVA_ARTIFACTS_FOUND" = "true" ]; then
             echo "::error::Artifact(s) named $NAME exist, but none was produced by a release/hotfix/support pipeline run building $RELEASE_SHA. Refusing to promote unverifiable bytes to prod. Review the warnings above for which runs uploaded them (possible tampering), then re-dispatch the release pipeline on the source branch to stage a fresh candidate."
             exit 1
@@ -188,25 +201,40 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
       attest: true
 
-  deploy:
+  image:
+    # Rebuild path only (rebuild-from-source dispatch, or a version-less
+    # redeploy): package the fresh build as an image. Runs under the prod
+    # environment — its identity builds the image, and the prod approval
+    # gate (if configured) covers the image build as well as the deploy.
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.promote-run-id == '' }}
     needs: [prepare, build]
-    # Run even when build was skipped (promotion path).
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    uses: ./.github/workflows/_image.yml
+    with:
+      environment: prod
+      build-label: ${{ needs.build.outputs.build-label }}
+
+  deploy:
+    needs: [prepare, build, image]
+    # Run even when build/image were skipped (promotion path).
     if: ${{ !failure() && !cancelled() }}
     # Callers must grant what the reusable workflow's job requests — the repo
     # default token is read-only and called workflows cannot elevate it.
     permissions:
       id-token: write
       contents: write
-      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: prod
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
-      # Blue/green: deploy to the staging slot, smoke test, then swap.
-      slot-swap: true
-      artifact-name: ${{ needs.prepare.outputs.promote-artifact || 'webapp-publish' }}
-      artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
-      # Tag the release-branch commit the artifact was built from (empty on
+      # Blue/green: stage the image as a zero-traffic revision, smoke test
+      # its revision FQDN, then shift traffic (shift back on failure).
+      traffic-shift: true
+      image-digest: ${{ needs.prepare.outputs.promote-image-digest || needs.image.outputs.image-digest }}
+      # Tag the release-branch commit the image was built from (empty on
       # the rebuild path — _deploy.yml then tags this run's HEAD).
       source-sha: ${{ needs.prepare.outputs.promote-sha }}
       tag-deployment: true

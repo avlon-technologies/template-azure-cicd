@@ -4,7 +4,7 @@
 [![PR Validation](https://github.com/avlon-technologies/template-azure-cicd/actions/workflows/on-pr.yml/badge.svg)](https://github.com/avlon-technologies/template-azure-cicd/actions/workflows/on-pr.yml)
 [![CI/CD — Develop → DEV](https://github.com/avlon-technologies/template-azure-cicd/actions/workflows/on-develop.yml/badge.svg?branch=develop)](https://github.com/avlon-technologies/template-azure-cicd/actions/workflows/on-develop.yml)
 
-A production-grade CI/CD pipeline template for **GitHub Actions → Azure App Service**, demonstrated with a minimal .NET 10 web API. Clone it, swap in your own application, and get environment promotion (dev → stg → prod), build-once-promote-many artifacts, blue/green production deploys, and secretless Azure authentication — without designing the pipeline yourself.
+A production-grade CI/CD pipeline template for **GitHub Actions → Azure Container Apps** (scale-to-zero), demonstrated with a minimal .NET 10 web API. Clone it, swap in your own application, and get environment promotion (dev → stg → prod), build-once-promote-many artifacts, blue/green production deploys, and secretless Azure authentication — without designing the pipeline yourself.
 
 ## Why this template exists
 
@@ -20,10 +20,10 @@ This template answers all of them with plain GitHub Actions workflows you can re
 
 ## Key features
 
-- **Environment promotion** — dev (automatic on merge), stg (manually dispatched release candidates), prod (automatic on release merge), each mapped to its own Azure App Service and GitHub environment.
-- **Build once, promote many** — release-candidate builds are stored as commit-keyed artifacts (90-day retention). Merging to `main` promotes the exact stg-tested binary; the pipeline **refuses to rebuild untested source for prod**, and **verifies the artifact's provenance** (which workflow run produced it, from which commit) before reusing or promoting it — an artifact merely *named* right is rejected.
+- **Environment promotion** — dev (automatic on merge), stg (manually dispatched release candidates), prod (automatic on release merge), each mapped to its own scale-to-zero Azure Container App and GitHub environment.
+- **Build once, promote many** — the tested build output is packaged once into a container image (`az acr build` — no Docker on any runner) and every deploy **pins its immutable digest**. Merging to `main` promotes the exact stg-tested image; the pipeline **refuses to rebuild untested source for prod**, and **verifies provenance** (which workflow run produced the candidate, from which commit) before reusing or promoting it — an artifact merely *named* right is rejected.
 - **Verified deploys** — every deploy ends with a smoke test that asserts both the health endpoint *and* that the app reports the intended build label (stamped into the assembly at build time, exposed via OpenAPI).
-- **Blue/green production deploys** — the artifact lands in a staging slot, is smoke-tested there, then swapped into production. A failed post-swap smoke test automatically swaps the previous build back.
+- **Blue/green production deploys** — the image is staged as a zero-traffic Container Apps revision, smoke-tested on its own URL, then traffic shifts to it. A failed post-shift smoke test automatically shifts traffic back to the previous revision.
 - **Secretless Azure auth** — OIDC workload identity federation with one scoped deploy identity per environment. There are no repository secrets at all.
 - **Full release lifecycle** — gitflow-style release, hotfix, and support branches; automatic version detection from merge commits; immutable `build/<env>/<label>` audit tags; GitHub Releases; automated back-merge/backport PRs to `develop`.
 - **Hardened workflows** — actions pinned to commit SHAs (Dependabot-maintained), least-privilege job permissions, injection-safe input handling, per-environment concurrency groups, per-job timeouts.
@@ -38,13 +38,13 @@ graph LR
     dev_branch -->|cut branch| rel[release/X.Y.Z]
     rel -->|manual dispatch rc| stg_env([stg])
     rel -->|PR merge commit| main[main]
-    main -->|promote stg-tested artifact,<br/>blue/green swap| prod_env([prod])
+    main -->|promote stg-tested image,<br/>blue/green traffic shift| prod_env([prod])
     main -.->|automated back-merge PR| dev_branch
 ```
 
 1. Features merge to `develop` via PR (build + test is a required check) and deploy to **dev** automatically.
 2. A release branch (`release/1.2.0`) is cut; pushes to it build only. A release coordinator dispatches the pipeline with an rc label (`1.2.0-rc.1`) to deploy to **stg**, which tags the commit `build/stg/1.2.0-rc.1` on success.
-3. Merging the release PR to `main` (merge commit required) extracts the version, verifies a green staging deploy exists, promotes that exact artifact to **prod** via slot swap, tags `build/prod/1.2.0`, creates GitHub Release `v1.2.0`, and opens a back-merge PR to `develop`.
+3. Merging the release PR to `main` (merge commit required) extracts the version, verifies a green staging deploy exists, promotes that exact image digest to **prod** via a blue/green revision traffic shift, tags `build/prod/1.2.0`, creates GitHub Release `v1.2.0`, and opens a back-merge PR to `develop`.
 
 Hotfix (`hotfix/*`) and support (`support/*`) branches follow the same stg-then-prod path, cut from `main` instead of `develop`. Full operator procedures: [docs/operations-manual.md](docs/operations-manual.md).
 
@@ -55,7 +55,8 @@ Hotfix (`hotfix/*`) and support (`support/*`) branches follow the same stg-then-
 ├── .github/
 │   ├── workflows/
 │   │   ├── _build.yml           # Reusable: build, test, publish, upload artifact, stamp build label
-│   │   ├── _deploy.yml          # Reusable: OIDC login, deploy (optionally slot-swap), smoke test, tag
+│   │   ├── _image.yml           # Reusable: package the tested output as a container image (az acr build), attest digest
+│   │   ├── _deploy.yml          # Reusable: OIDC login, digest-pinned deploy (prod: revision blue/green), smoke test, tag
 │   │   ├── _hotfix-support.yml  # Reusable: shared hotfix/support pipeline logic
 │   │   ├── on-pr.yml            # PRs to develop/main → build + test (required check) + source-branch guard
 │   │   ├── on-develop.yml       # develop → dev (automatic)
@@ -94,11 +95,11 @@ Hotfix (`hotfix/*`) and support (`support/*`) branches follow the same stg-then-
 
 **To deploy your own instance:**
 
-- An Azure subscription, with permission to create resource groups, App Services, user-assigned managed identities, and role assignments
+- An Azure subscription, with permission to create resource groups, Container Apps, a container registry, user-assigned managed identities, and role assignments
 - A GitHub repository (Actions enabled) where you have admin access — rulesets, environments, and Actions settings must be configured
 - A machine to host the **self-hosted deploy runner** (deploy jobs run on it; builds stay on GitHub-hosted runners) — see [getting-started](docs/getting-started.md#self-hosted-deploy-runner)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`) for identity setup; [GitHub CLI](https://cli.github.com/) (`gh`) is optional but used throughout the docs
-- Provisioned Azure infrastructure — one App Service per environment (prod on a plan that supports deployment slots). The reference deployment provisions this with Terraform in the platform repo `avlon-technologies/infrastructure` (module `infra/modules/cicd-demo/`); any provisioning method works as long as the [required resources](docs/getting-started.md#step-2--provision-azure-resources) exist.
+- Provisioned Azure infrastructure — one Container Apps environment + scale-to-zero Container App per environment (prod in Multiple revision mode for blue/green), plus a shared container registry. The reference deployment provisions this with Terraform in the platform repo `avlon-technologies/infrastructure` (module `infra/modules/cicd-demo/`, ADR-0008); any provisioning method works as long as the [required resources](docs/getting-started.md#step-2--provision-azure-resources) exist.
 
 ## Quick start (local)
 
@@ -119,8 +120,8 @@ dotnet test
 Condensed from [docs/getting-started.md](docs/getting-started.md), which has the full commands:
 
 1. **Get the code** — use this repo as a template (or fork/clone) into your own GitHub repository, with `develop` as the default branch.
-2. **Provision Azure** — per environment: a resource group and an App Service; prod additionally needs a `staging` deployment slot.
-3. **Create deploy identities** — one user-assigned managed identity per environment with a federated credential trusting `repo:<owner>/<repo>:environment:<env>`, and the Website Contributor role scoped to that environment's resource group. See [workload identity federation](docs/workload-identity-federation.md).
+2. **Provision Azure** — per environment: a resource group, a Container Apps environment, and a scale-to-zero Container App; prod additionally needs `Multiple` revision mode. Plus one shared container registry.
+3. **Create deploy identities** — one user-assigned managed identity per environment with a federated credential trusting `repo:<owner>/<repo>:environment:<env>`, Container Apps Contributor scoped to that environment's resource group, and registry build/pull roles on the shared registry. See [workload identity federation](docs/workload-identity-federation.md).
 4. **Configure GitHub** — create the `dev`, `stg`, `prod` environments and set the variables and settings below.
 5. **Customize** — work through [docs/customization.md](docs/customization.md) (project names, resource-group names, smoke-test URLs).
 6. **Deploy** — merge or push to `develop`; the pipeline builds, tests, deploys to dev, and smoke-tests the result.
@@ -179,7 +180,8 @@ Two reusable workflows (prefixed `_`) implement the mechanisms; branch-triggered
 | `on-hotfix.yml` / `on-support.yml` | Push to `hotfix/**` / `support/**`; manual dispatch | Same dispatch-gated stg pattern, for branches cut from `main` |
 | `on-main.yml` | Push to `main`; manual dispatch | Promote the stg-tested artifact to **prod** (blue/green), tag, create the GitHub Release, open the back-merge PR. Dispatch input `version` redeploys/rolls back to any released version within artifact retention |
 | `_build.yml` | Called | Restore, build (stamping the label into `InformationalVersion`), test (published as a PR check), publish, upload artifact |
-| `_deploy.yml` | Called | Download artifact, OIDC login, deploy (direct or slot→smoke→swap), smoke-test, write run summary, tag the deployment. Runs on the self-hosted deploy runner; notifies `DEPLOY_ALERT_WEBHOOK` on failure if set |
+| `_image.yml` | Called | Package the tested publish output as a container image via `az acr build`, tag `sha-<sha>` + label, attest the digest, upload the digest marker |
+| `_deploy.yml` | Called | OIDC login, deploy the digest-pinned image to the Container App (prod: zero-traffic revision → smoke → traffic shift → shift back on failure), smoke-test, write run summary, tag the deployment. Runs on the self-hosted deploy runner; notifies `DEPLOY_ALERT_WEBHOOK` on failure if set |
 | `codeql.yml` | PRs, `develop` pushes, weekly | CodeQL static analysis for the C# code (alerts under Security → Code scanning) |
 | `reconcile-releases.yml` | Weekday schedule; manual dispatch | Audits recent `main` merges for versions whose prod run was silently superseded (no `build/prod/*` tag, no Release) and fails/alerts with recovery commands |
 | `show-oidc-token.yml` | Manual dispatch | Prints the decoded OIDC token claims for learning/debugging (minted with a non-Azure audience, so it can't be exchanged for access) |
@@ -190,13 +192,13 @@ Deploys to the same environment serialize via concurrency groups (`deploy-dev` /
 
 - Every deploy smoke-tests `GET /v1/hello` **and** asserts `/openapi/v1.json` reports the deployed build label — "green" means the right build is actually serving.
 - Every stg/prod deploy tags the built commit `build/<env>/<label>`; tags are immutable and are the promotion gate's proof that staging tested the build.
-- **Instant prod rollback**: the previous production build stays in the staging slot after every swap — one `az webapp deployment slot swap` brings it back. Rollback to any older released version is a `workflow_dispatch` away.
+- **Instant prod rollback**: the previous revision stays active at zero traffic after every shift — one `az containerapp ingress traffic set` brings it back. Rollback to any older released version is a `workflow_dispatch` away.
 - A comprehensive symptom → cause table lives in the [operations manual's troubleshooting section](docs/operations-manual.md#troubleshooting).
 
 ## Security considerations
 
 - **No stored cloud credentials.** Deploys authenticate via [OIDC workload identity federation](docs/workload-identity-federation.md); tokens are job-scoped, short-lived, and bound to a specific repo + GitHub environment.
-- **Blast-radius isolation.** Each environment has its own deploy identity with Website Contributor scoped to *only* its resource group — a compromised dev pipeline cannot touch prod.
+- **Blast-radius isolation.** Each environment has its own deploy identity with Container Apps Contributor scoped to *only* its resource group (plus registry build/pull roles) — a compromised dev pipeline cannot touch prod.
 - **Least-privilege tokens.** The default `GITHUB_TOKEN` is read-only; each job declares exactly the permissions it needs.
 - **Supply-chain pinning.** All actions are pinned to full commit SHAs with a version comment, kept current by Dependabot.
 - **Injection-safe workflows.** Workflow inputs reach shell scripts via `env:`, never by direct interpolation; version labels are charset-restricted because they become artifact names and git tags.
@@ -204,7 +206,7 @@ Deploys to the same environment serialize via concurrency groups (`deploy-dev` /
 
 ## Azure resource naming
 
-The reference deployment names resources `<type>-cicd-demo-<env>-cc` (e.g. `rg-cicd-demo-prod-cc`, `app-cicd-demo-prod-cc`, `asp-cicd-demo-prod-cc`) — resource-type prefix, project name, environment, region suffix, following the org's engineering-standards handbook. Nothing is hardcoded in the workflows: the names reach `_deploy.yml` only through each GitHub environment's `WEBAPP_NAME` and `RESOURCE_GROUP` variables — see [customization](docs/customization.md). The per-environment topology is described in [C2 — Containers](docs/c2-containers/README.md#deployment-topology-per-environment).
+The reference deployment names resources `<type>-cicd-demo-<env>-cc` (e.g. `rg-cicd-demo-prod-cc`, `ca-cicd-demo-api-prod-cc`, `cae-cicd-demo-prod-cc`) — resource-type prefix, project name, environment, region suffix, following the org's engineering-standards handbook. Nothing is hardcoded in the workflows: the names reach `_image.yml`/`_deploy.yml` only through each GitHub environment's `CONTAINERAPP_NAME` and `RESOURCE_GROUP` variables (and the `ACR_NAME` repo variable) — see [customization](docs/customization.md). The per-environment topology is described in [C2 — Containers](docs/c2-containers/README.md#deployment-topology-per-environment).
 
 ## Maintenance
 

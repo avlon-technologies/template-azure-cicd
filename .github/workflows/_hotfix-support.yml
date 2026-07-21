@@ -32,6 +32,7 @@ jobs:
       version: ${{ steps.promote.outputs.version || steps.version.outputs.value }}
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
+      promote-image-digest: ${{ steps.promote.outputs.image-digest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -121,14 +122,25 @@ jobs:
             echo "Artifact $NAME exists but carries no label marker (built before markers were introduced) — rebuilding."
             exit 0
           fi
+          # The image job uploads a digest marker (<artifact>.image.<hex>)
+          # — the immutable image the deploy must pin. No marker means the
+          # push predates container deploys: rebuild.
+          EXISTING_DIGEST=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq ".artifacts[].name | select(startswith(\"$NAME.image.\"))" | head -1)
+          EXISTING_DIGEST="${EXISTING_DIGEST#"$NAME.image."}"
+          if [ -z "$EXISTING_DIGEST" ]; then
+            echo "Artifact $NAME has no image-digest marker (built before container deploys) — rebuilding."
+            exit 0
+          fi
           if [ "$EXISTING_LABEL" != "$DERIVED" ]; then
             echo "::warning::Existing artifact is stamped '$EXISTING_LABEL' (derived '$DERIVED' — label derivation changed since the push build). Deploying the binary as what it actually reports."
             echo "⚠️ **Label drift:** existing artifact is stamped \`$EXISTING_LABEL\` but the current derivation yields \`$DERIVED\`. Deploying under the stamped label — push a new commit to adopt the new derivation." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL') from run $RUN_ID — build will be skipped."
+          echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL', image sha256:$EXISTING_DIGEST) from run $RUN_ID — build will be skipped."
           echo "artifact=$NAME" >> $GITHUB_OUTPUT
           echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "version=$EXISTING_LABEL" >> $GITHUB_OUTPUT
+          echo "image-digest=sha256:$EXISTING_DIGEST" >> $GITHUB_OUTPUT
 
   build:
     if: needs.prepare.outputs.promote-run-id == ''
@@ -150,19 +162,35 @@ jobs:
       retention-days: 90
       attest: true
 
-  deploy:
-    if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
+  image:
+    # Push builds stage the image too, so a later dispatch (and the prod
+    # promotion) reuses the exact image digest without rebuilding anything.
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.promote-run-id == '' }}
     needs: [prepare, build]
     permissions:
       id-token: write
+      contents: read
+      attestations: write
+    uses: ./.github/workflows/_image.yml
+    with:
+      # stg identity builds hotfix/support images (Tasks Contributor +
+      # AcrPull on the shared registry).
+      environment: stg
+      build-label: ${{ needs.build.outputs.build-label }}
+      artifact-name: webapp-${{ inputs.sha }}
+      retention-days: 90
+
+  deploy:
+    if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
+    needs: [prepare, build, image]
+    permissions:
+      id-token: write
       contents: write
-      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
-      artifact-name: webapp-${{ inputs.sha }}
-      artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      image-digest: ${{ needs.prepare.outputs.promote-image-digest || needs.image.outputs.image-digest }}
       # stg tags are the prod promotion gate's proof of a green staging
       # deploy and the QA/UAT audit trail.
       tag-deployment: true
