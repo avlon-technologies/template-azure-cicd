@@ -22,6 +22,31 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/_build.yml
 
+  lint-workflows:
+    name: Lint workflows
+    # actionlint statically validates every workflow: expression types,
+    # job/step wiring, runner labels, action inputs — and shellcheck on
+    # every run: block (shellcheck is preinstalled on ubuntu-latest).
+    # Pinned by version AND checksum: this runs before any review gate,
+    # so it gets the same supply-chain treatment as an action pin.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Run actionlint
+        env:
+          # Warning severity and above; SC2154 excluded (step env vars are
+          # assigned by the workflow `env:` blocks shellcheck can't see).
+          SHELLCHECK_OPTS: -S warning -e SC2154
+        run: |
+          curl -fsSL -o /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint -color
+
   workflow-scripts:
     name: Test workflow scripts
     # Regression tests for the bash the workflows source — most importantly

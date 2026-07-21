@@ -157,7 +157,7 @@ jobs:
         # deployed bytes are the bytes this workflow built (_deploy.yml
         # does both before every deploy).
         run: |
-          cd publish
+          cd publish || exit 1
           find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           echo "Manifest covers $(wc -l < SHA256SUMS) files."
 
