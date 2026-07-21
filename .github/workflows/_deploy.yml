@@ -5,42 +5,45 @@ on:
     inputs:
       environment:
         description: >
-          GitHub environment name (dev | stg | prod). The App Service name,
-          resource group, and OIDC client ID come from that environment's
-          variables (WEBAPP_NAME, RESOURCE_GROUP, AZURE_CLIENT_ID) — the job's
-          `environment:` declaration scopes the vars context to it.
+          GitHub environment name (dev | stg | prod). The Container App
+          name, resource group, and OIDC client ID come from that
+          environment's variables (CONTAINERAPP_NAME, RESOURCE_GROUP,
+          AZURE_CLIENT_ID) — the job's `environment:` declaration scopes
+          the vars context to it.
         type: string
         required: true
       build-label:
         description: >
           Build label (e.g. YYYYMMDD.run_number) shown in the run summary,
-          asserted by the smoke tests, and used for the deployment tag when
-          tag-deployment is set.
+          asserted by the smoke tests, used for the deployment tag when
+          tag-deployment is set, and (sanitized) as the prod revision
+          suffix.
         type: string
         required: true
-      slot-swap:
-        description: Deploy to the staging slot, smoke test, then swap (requires a Standard+ plan with a "staging" slot)
+      image-digest:
+        description: >
+          Immutable image digest (sha256:<hex>) to deploy, from _image.yml
+          or a provenance-verified digest marker. Deploys always pin the
+          digest — never a tag — so the bytes that ship are exactly the
+          bytes the trusted pipeline built.
+        type: string
+        required: true
+      traffic-shift:
+        description: >
+          Blue/green via Container Apps revisions (requires the app in
+          Multiple revision mode — prod). Stages the new image as a
+          zero-traffic revision, smoke tests its revision FQDN, shifts
+          traffic to it, and shifts back if the post-shift smoke test
+          fails. Single-revision environments (dev/stg) leave this false.
         type: boolean
         required: false
         default: false
-      artifact-name:
-        description: Publish artifact to deploy
-        type: string
-        required: false
-        default: 'webapp-publish'
-      artifact-run-id:
-        description: >
-          Workflow run to take the artifact from. Empty = this run. Set for
-          build-once promotion (deploy the stg-tested artifact, no rebuild).
-        type: string
-        required: false
-        default: ''
       source-sha:
         description: >
-          Commit the deployed artifact was built from. Empty = this run's HEAD.
-          Set on the prod promotion/rollback path so the deployment tag points
-          at the release-branch commit that produced the artifact, not the
-          merge commit or current main HEAD.
+          Commit the deployed image was built from. Empty = this run's HEAD.
+          Set on the prod promotion/rollback path so the deployment tag
+          points at the release-branch commit that produced the image, not
+          the merge commit or current main HEAD.
         type: string
         required: false
         default: ''
@@ -54,33 +57,35 @@ on:
         type: boolean
         required: false
         default: false
+      runner-labels:
+        description: >
+          JSON array of runner labels the deploy job requires. The default
+          matches any self-hosted runner. Once more than one runner exists,
+          give each environment's runner a distinct label and pin it here
+          (e.g. '["self-hosted", "prod-deploy"]') so prod deploys only run
+          on isolated prod runners — see getting-started's runner section.
+        type: string
+        required: false
+        default: '["self-hosted"]'
 
 jobs:
   deploy:
     name: Deploy to ${{ inputs.environment }}
-    # Self-hosted: the App Service deploy surfaces are IP-allowlisted
-    # (deploy_ingress_cidrs in the infrastructure repo, ADR-0005/0006), so
-    # deploys must egress from the allowlisted self-hosted runner —
-    # GitHub-hosted runners get 403s once the allowlist is on.
-    runs-on: [self-hosted]
+    # Self-hosted: deploys are control-plane (any runner could run them),
+    # but the smoke tests must reach the app's single ingress, which is
+    # IP-allowlisted (allowed/deploy_ingress_cidrs in the infrastructure
+    # repo, ADR-0005/0008) — so the job egresses from the allowlisted
+    # self-hosted runner. Needs az, curl, jq on PATH.
+    runs-on: ${{ fromJSON(inputs.runner-labels) }}
     environment: ${{ inputs.environment }}
+    # A hung deploy or traffic shift must not hold the environment's
+    # concurrency group (and the shared runner) for GitHub's 6-hour default.
+    timeout-minutes: 30
     permissions:
       id-token: write
       contents: write
-      # download-artifact with an explicit run-id + github-token reads via the
-      # REST API, which needs actions: read (the promotion path pulls the
-      # artifact from a different run). Callers must grant this too.
-      actions: read
 
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ inputs.artifact-name }}
-          path: ./publish
-          run-id: ${{ inputs.artifact-run-id || github.run_id }}
-          github-token: ${{ github.token }}
-
       - name: Login to Azure
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -88,77 +93,188 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to App Service
-        if: ${{ !inputs.slot-swap }}
-        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
-        with:
-          app-name: ${{ vars.WEBAPP_NAME }}
-          package: ./publish
-
-      - name: Deploy to staging slot
-        if: ${{ inputs.slot-swap }}
-        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
-        with:
-          app-name: ${{ vars.WEBAPP_NAME }}
-          slot-name: staging
-          package: ./publish
-
-      - name: Smoke test staging slot
-        if: ${{ inputs.slot-swap }}
+      - name: Resolve deployment target
+        id: target
         env:
-          URL: https://${{ vars.WEBAPP_NAME }}-staging.azurewebsites.net
+          APP: ${{ vars.CONTAINERAPP_NAME }}
+          RG: ${{ vars.RESOURCE_GROUP }}
+          ACR: ${{ vars.ACR_NAME }}
+          DIGEST: ${{ inputs.image-digest }}
+          LABEL: ${{ inputs.build-label }}
+        run: |
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::image-digest '$DIGEST' is not a sha256:<hex> digest — refusing to deploy an unpinned image."
+            exit 1
+          fi
+          IMAGE="$ACR.azurecr.io/cicd-demo/api@$DIGEST"
+          FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
+          if [ -z "$FQDN" ]; then
+            echo "::error::Could not resolve the Container App's ingress FQDN — is '$APP' provisioned with ingress in '$RG'?"
+            exit 1
+          fi
+          # Revision suffix: lowercase alphanumerics and '-' only (verified
+          # against a live app: a leading digit is accepted). Labels are
+          # already charset-restricted upstream; dots become dashes.
+          SUFFIX=$(echo "$LABEL" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+          if [ -z "$SUFFIX" ]; then
+            echo "::error::Build label '$LABEL' sanitized to an empty revision suffix."
+            exit 1
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "fqdn=$FQDN" >> "$GITHUB_OUTPUT"
+          echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
+          echo "Deploying $IMAGE to $APP ($RG)"
+
+      - name: Verify image attestation
+        # Cryptographic defense-in-depth behind the provenance-verified
+        # digest markers: the digest being deployed must carry a
+        # GitHub-signed build-provenance attestation from this repo's
+        # _image.yml. A digest that was never attested — or attested by
+        # anything else — fails before any az containerapp call runs.
+        # Registry auth for gh's registry client: an ACR access token via
+        # the deploy identity (AcrPull), wired into a throwaway docker
+        # config — no docker CLI involved. Needs gh on the runner
+        # (github-runner image ≥ 1.4.0).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACR: ${{ vars.ACR_NAME }}
+          DIGEST: ${{ inputs.image-digest }}
+        run: |
+          TOKEN=$(az acr login --name "$ACR" --expose-token --output tsv --query accessToken)
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-attest"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '{"auths":{"%s.azurecr.io":{"auth":"%s"}}}' "$ACR" \
+            "$(printf '00000000-0000-0000-0000-000000000000:%s' "$TOKEN" | base64 -w0)" \
+            > "$DOCKER_CONFIG/config.json"
+          gh attestation verify "oci://$ACR.azurecr.io/cicd-demo/api@$DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/_image.yml"
+          rm -rf "$DOCKER_CONFIG"
+          echo "Attestation verified: $DIGEST was built by _image.yml in $GITHUB_REPOSITORY."
+
+      - name: Update container app
+        if: ${{ !inputs.traffic-shift }}
+        env:
+          APP: ${{ vars.CONTAINERAPP_NAME }}
+          RG: ${{ vars.RESOURCE_GROUP }}
+          IMAGE: ${{ steps.target.outputs.image }}
+        run: az containerapp update -n "$APP" -g "$RG" --image "$IMAGE" --output none
+
+      - name: Pin traffic to the current revision
+        # Multiple-revision mode: before staging, pin 100% traffic to the
+        # revision serving now (first pipeline deploy finds Terraform's
+        # latestRevision=true seed — pinning it by name is what makes the
+        # newly staged revision start at 0%).
+        if: ${{ inputs.traffic-shift }}
+        id: pin
+        env:
+          APP: ${{ vars.CONTAINERAPP_NAME }}
+          RG: ${{ vars.RESOURCE_GROUP }}
+        run: |
+          CURRENT=$(az containerapp show -n "$APP" -g "$RG" \
+            --query 'properties.configuration.ingress.traffic[?weight==`100`].revisionName | [0]' -o tsv)
+          if [ -z "$CURRENT" ]; then
+            CURRENT=$(az containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv)
+          fi
+          az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$CURRENT=100" --output none
+          echo "Traffic pinned to $CURRENT"
+          echo "previous=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      - name: Stage new revision (zero traffic)
+        if: ${{ inputs.traffic-shift }}
+        id: stage
+        env:
+          APP: ${{ vars.CONTAINERAPP_NAME }}
+          RG: ${{ vars.RESOURCE_GROUP }}
+          IMAGE: ${{ steps.target.outputs.image }}
+          SUFFIX: ${{ steps.target.outputs.suffix }}
+        run: |
+          REV="$APP--$SUFFIX"
+          ERR="${RUNNER_TEMP:-/tmp}/revision-show-err"
+          if EXISTING=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$REV" \
+              --query 'properties.template.containers[0].image' -o tsv 2>"$ERR"); then
+            # Same label staged before (re-run, or rollback to a version
+            # whose revision still exists). Safe only if it is the same
+            # pinned image — a mismatch means a label collision.
+            if [ "$EXISTING" != "$IMAGE" ]; then
+              echo "::error::Revision $REV already exists with image '$EXISTING' but this deploy is '$IMAGE'. Revisions are immutable per label — use a new label."
+              exit 1
+            fi
+            az containerapp revision activate -n "$APP" -g "$RG" --revision "$REV" 2>/dev/null || true
+            echo "Reusing existing revision $REV (same image)."
+          else
+            # Only a genuine "revision doesn't exist" may fall through to
+            # creating one — a transient CLI/ARM failure must not
+            # masquerade as first-time staging.
+            if ! grep -qiE 'not.?found|does not exist' "$ERR"; then
+              echo "::error::Could not determine whether revision $REV exists:"
+              cat "$ERR"
+              exit 1
+            fi
+            az containerapp update -n "$APP" -g "$RG" --image "$IMAGE" --revision-suffix "$SUFFIX" --output none
+          fi
+          REV_FQDN=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$REV" --query properties.fqdn -o tsv)
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+          echo "rev-fqdn=$REV_FQDN" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test staged revision
+        if: ${{ inputs.traffic-shift }}
+        env:
+          URL: https://${{ steps.stage.outputs.rev-fqdn }}
           EXPECTED: ${{ inputs.build-label }}
         run: |
-          # Healthy = answers correctly AND reports the intended build. The
-          # version check treats a mismatch as "not ready" (the old build may
-          # still be serving while the new one warms up) and only fails when
-          # the loop times out. Promoted binaries keep their rc stamp, so the
-          # exact label or a pre-release of it (1.6.0 ← 1.6.0-rc.3) passes.
+          # Healthy = answers correctly AND reports the intended build.
+          # Scale-to-zero cold starts mean the first request can take tens
+          # of seconds — curl waits up to 30s per attempt and a version
+          # mismatch counts as "not ready" until the loop times out.
+          # Promoted binaries keep their candidate stamp, so the exact
+          # label or a pre-release of it (1.6.0 ← 1.6.0-build.187) passes.
           DEPLOYED=""
-          for i in $(seq 1 12); do
-            BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
+          for i in $(seq 1 15); do
+            BODY=$(curl -fsS --max-time 30 "$URL/v1/hello" || true)
             if [ "$BODY" = "Hello World!" ]; then
-              DEPLOYED=$(curl -fsS --max-time 10 "$URL/openapi/v1.json" | jq -r '.info.version // empty' || true)
+              DEPLOYED=$(curl -fsS --max-time 30 "$URL/openapi/v1.json" | jq -r '.info.version // empty' || true)
               if [ "$DEPLOYED" = "$EXPECTED" ] || [[ "$DEPLOYED" == "$EXPECTED"-* ]]; then
-                echo "Slot healthy: $URL is serving build $DEPLOYED"
+                echo "Staged revision healthy: $URL is serving build $DEPLOYED"
                 exit 0
               fi
-              echo "Attempt $i: slot answering but reports version '${DEPLOYED:-<none>}', want '$EXPECTED'"
+              echo "Attempt $i: revision answering but reports version '${DEPLOYED:-<none>}', want '$EXPECTED'"
             else
-              echo "Attempt $i: slot not ready yet"
+              echo "Attempt $i: revision not ready yet"
             fi
             sleep 10
           done
-          echo "::error::Staging slot failed smoke test (last version seen: '${DEPLOYED:-<none>}', expected '$EXPECTED') — aborting before swap. Production is untouched."
+          echo "::error::Staged revision failed smoke test (last version seen: '${DEPLOYED:-<none>}', expected '$EXPECTED') — aborting before any traffic shift. Production traffic is untouched."
           exit 1
 
-      - name: Swap staging slot into production
-        id: swap
-        if: ${{ inputs.slot-swap }}
-        run: >
-          az webapp deployment slot swap
-          --resource-group ${{ vars.RESOURCE_GROUP }}
-          --name ${{ vars.WEBAPP_NAME }}
-          --slot staging
-          --target-slot production
+      - name: Shift traffic to the new revision
+        id: shift
+        if: ${{ inputs.traffic-shift }}
+        env:
+          APP: ${{ vars.CONTAINERAPP_NAME }}
+          RG: ${{ vars.RESOURCE_GROUP }}
+          REV: ${{ steps.stage.outputs.revision }}
+        run: |
+          az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$REV=100" --output none
+          echo "Traffic shifted to $REV"
 
       - name: Smoke test deployment
         env:
           # Through the gateway when the environment defines GATEWAY_URL —
-          # the app's main site only admits the gateway's IP (ADR-0005), so
-          # its own hostname 403s everyone including this runner. Falls back
-          # to the app hostname for environments without the lockdown.
-          URL: ${{ vars.GATEWAY_URL || format('https://{0}.azurewebsites.net', vars.WEBAPP_NAME) }}
+          # the app's ingress allowlist may only admit the gateway and this
+          # runner. Falls back to the app's own FQDN otherwise.
+          URL: ${{ vars.GATEWAY_URL || format('https://{0}', steps.target.outputs.fqdn) }}
           EXPECTED: ${{ inputs.build-label }}
         run: |
-          # Same contract as the slot smoke test: right answer AND right
-          # build. Catches a swap that silently didn't take effect as well as
-          # a deploy that shipped the wrong artifact.
+          # Same contract as the staged-revision smoke test: right answer
+          # AND right build, through the surface users actually hit.
+          # Catches a shift that silently didn't take effect as well as a
+          # deploy that shipped the wrong image.
           DEPLOYED=""
-          for i in $(seq 1 12); do
-            BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
+          for i in $(seq 1 15); do
+            BODY=$(curl -fsS --max-time 30 "$URL/v1/hello" || true)
             if [ "$BODY" = "Hello World!" ]; then
-              DEPLOYED=$(curl -fsS --max-time 10 "$URL/openapi/v1.json" | jq -r '.info.version // empty' || true)
+              DEPLOYED=$(curl -fsS --max-time 30 "$URL/openapi/v1.json" | jq -r '.info.version // empty' || true)
               if [ "$DEPLOYED" = "$EXPECTED" ] || [[ "$DEPLOYED" == "$EXPECTED"-* ]]; then
                 echo "Deployment healthy: $URL is serving build $DEPLOYED"
                 exit 0
@@ -172,33 +288,36 @@ jobs:
           echo "::error::Deployment failed smoke test at $URL (last version seen: '${DEPLOYED:-<none>}', expected '$EXPECTED')"
           exit 1
 
-      - name: Swap back after failed post-swap smoke test
-        # steps.swap.outcome == 'success' means the swap actually ran — a
-        # pre-swap failure (bad build caught in the slot) must NOT swap, and a
-        # non-slot deploy has nothing to swap back to. The job still fails;
-        # this only restores the previous production build.
-        if: ${{ failure() && steps.swap.outcome == 'success' }}
+      - name: Shift traffic back after failed post-shift smoke test
+        # steps.shift.outcome == 'success' means traffic actually moved — a
+        # pre-shift failure (bad image caught on the staged revision) must
+        # NOT touch traffic, and a single-revision deploy has nothing to
+        # shift back to. The job still fails; this only restores the
+        # previous revision.
+        if: ${{ failure() && steps.shift.outcome == 'success' }}
+        env:
+          APP: ${{ vars.CONTAINERAPP_NAME }}
+          RG: ${{ vars.RESOURCE_GROUP }}
+          PREVIOUS: ${{ steps.pin.outputs.previous }}
         run: |
-          echo "::error::Post-swap smoke test failed — swapping the previous build back into production."
-          az webapp deployment slot swap \
-            --resource-group ${{ vars.RESOURCE_GROUP }} \
-            --name ${{ vars.WEBAPP_NAME }} \
-            --slot staging \
-            --target-slot production
+          echo "::error::Post-shift smoke test failed — shifting traffic back to $PREVIOUS."
+          az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$PREVIOUS=100" --output none
 
       - name: Output deployment URL
         env:
-          URL: ${{ vars.GATEWAY_URL || format('https://{0}.azurewebsites.net', vars.WEBAPP_NAME) }}
+          URL: ${{ vars.GATEWAY_URL || format('https://{0}', steps.target.outputs.fqdn) }}
+          DIGEST: ${{ inputs.image-digest }}
         run: |
           echo "Deployed ${{ inputs.build-label }} to ${{ inputs.environment }}: $URL"
           {
-            echo "### 🚀 Deployed \`${{ inputs.build-label }}\` to **${{ inputs.environment }}**${{ inputs.slot-swap && ' (slot swap)' || '' }}"
+            echo "### 🚀 Deployed \`${{ inputs.build-label }}\` to **${{ inputs.environment }}**${{ inputs.traffic-shift && ' (blue/green revision shift)' || '' }}"
             echo ""
             echo "| | |"
             echo "|---|---|"
             echo "| App | $URL |"
             echo "| Swagger | $URL/swagger |"
             echo "| API | $URL/v1/hello |"
+            echo "| Image | \`cicd-demo/api@$DIGEST\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tag deployment
@@ -211,7 +330,7 @@ jobs:
           TAG_REF: refs/tags/build/${{ inputs.environment }}/${{ inputs.build-label }}
         with:
           script: |
-            // Tag the commit the artifact was built from — on the prod
+            // Tag the commit the image was built from — on the prod
             // promotion/rollback path that is the release branch head, not
             // this run's HEAD.
             const sha = process.env.SOURCE_SHA || context.sha;
@@ -236,3 +355,27 @@ jobs:
                 core.setFailed(`${tagRef} already points at ${existing.data.object.sha} but this deploy is ${sha}. Deployment tags are immutable — use a new label.`);
               }
             }
+
+      - name: Notify deploy failure
+        # Opt-in push notification: set DEPLOY_ALERT_WEBHOOK (environment or
+        # repo variable) to a chat webhook accepting a {"text": ...} payload
+        # (Slack/Teams-style). Without it a failed deploy — including an
+        # executed traffic shift-back, which is a prod incident — is visible
+        # only to whoever watches the Actions tab.
+        # cancelled() is load-bearing: a job killed by timeout-minutes (the
+        # hung-deploy case) reports *cancelled*, not failed — failure()
+        # alone would skip the alert in exactly the scenario the timeout
+        # exists for. GitHub still runs condition-matching steps during
+        # cancellation teardown. Manual cancellations alert too, which is
+        # correct for a deploy job (concurrency never auto-cancels these).
+        if: ${{ (failure() || cancelled()) && vars.DEPLOY_ALERT_WEBHOOK != '' }}
+        env:
+          WEBHOOK: ${{ vars.DEPLOY_ALERT_WEBHOOK }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          BUILD_LABEL: ${{ inputs.build-label }}
+          STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n --arg text "🚨 Deploy of $BUILD_LABEL to $ENVIRONMENT did not succeed (status: $STATUS): $RUN_URL" '{text: $text}' \
+            | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$WEBHOOK" \
+            || echo "::warning::Could not deliver the failure notification to DEPLOY_ALERT_WEBHOOK."

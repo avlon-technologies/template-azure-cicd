@@ -1,0 +1,91 @@
+name: Reconcile Releases
+
+# Safety net for a known silent failure mode: the deploy-prod concurrency
+# group keeps only the newest *queued* run, so when several release merges
+# land in quick succession, an intermediate version's prod run can be
+# superseded and cancelled — leaving that version merged to main with no
+# prod deploy, no GitHub Release, and no back-merge PR, and nobody told.
+# This audit walks recent main merges and fails loudly (plus the optional
+# alert webhook) when a merged version has neither its build/prod/<version>
+# tag nor its vX.Y.Z Release.
+
+on:
+  schedule:
+    - cron: '43 6 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Audit merged versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          # Merge history plus tags; treeless keeps the full-history
+          # checkout cheap (commit objects only).
+          fetch-depth: 0
+          filter: tree:0
+          fetch-tags: true
+
+      - name: Check recent merges for missing deploys
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MISSING=""
+          NOW=$(date +%s)
+          while read -r SHA SUBJECT; do
+            BRANCH=$(grep -oE '(release|hotfix|support)/[0-9]+\.[0-9]+\.[0-9]+' <<< "$SUBJECT" | head -1 || true)
+            [ -z "$BRANCH" ] && continue
+            VERSION="${BRANCH#*/}"
+            # Grace period: the newest merge may still be deploying or
+            # waiting on the prod environment's approval gate.
+            COMMIT_TS=$(git log -1 --format=%ct "$SHA")
+            if [ $((NOW - COMMIT_TS)) -lt 7200 ]; then
+              echo "Skipping v$VERSION (merged <2h ago — its deploy may still be in flight)."
+              continue
+            fi
+            HAS_TAG=$([ -n "$(git tag -l "build/prod/$VERSION")" ] && echo true || echo false)
+            HAS_RELEASE=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 && echo true || echo false)
+            if [ "$HAS_TAG" = "false" ] && [ "$HAS_RELEASE" = "false" ]; then
+              # Both artifacts of a completed prod run are absent — the
+              # classic superseded-run signature.
+              MISSING="$MISSING v$VERSION"
+              echo "::error::v$VERSION was merged to main ($SHA) but has neither a build/prod/$VERSION tag nor a v$VERSION Release — its prod run was likely superseded and cancelled."
+            elif [ "$HAS_TAG" != "$HAS_RELEASE" ]; then
+              # One of the two exists: the deploy or the release job
+              # half-completed (or the version predates one mechanism).
+              # Surface it, but don't fail the audit.
+              echo "::warning::v$VERSION is inconsistent: build/prod tag=$HAS_TAG, GitHub Release=$HAS_RELEASE — check the version's on-main run."
+            fi
+          done < <(git log --merges --first-parent -n 20 --format='%H %s' main)
+
+          if [ -n "$MISSING" ]; then
+            {
+              echo "### ⚠️ Merged but never deployed:$MISSING"
+              echo ""
+              echo "Each listed version is on \`main\` but its prod run never completed (most likely superseded by a newer merge while queued). Recover each with:"
+              echo ""
+              echo '```'
+              echo "gh workflow run on-main.yml --ref main -f version=<version>"
+              echo '```'
+              echo ""
+              echo "Then confirm its GitHub Release and back-merge/backport PR exist — the cancelled run created neither."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Merged versions with no prod deploy:$MISSING — see the run summary for recovery steps."
+            exit 1
+          fi
+          echo "All recently merged versions have completed prod deploys."
+
+      - name: Notify audit failure
+        if: ${{ (failure() || cancelled()) && vars.DEPLOY_ALERT_WEBHOOK != '' }}
+        env:
+          WEBHOOK: ${{ vars.DEPLOY_ALERT_WEBHOOK }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n --arg text "⚠️ Release reconciliation found merged versions with no prod deploy: $RUN_URL" '{text: $text}' \
+            | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$WEBHOOK" \
+            || echo "::warning::Could not deliver the reconciliation alert to DEPLOY_ALERT_WEBHOOK."

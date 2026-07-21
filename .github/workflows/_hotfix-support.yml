@@ -24,6 +24,7 @@ jobs:
   prepare:
     name: Resolve version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       # When an existing artifact is reused, its stamped label (from the
       # promote step) wins over the freshly derived one — the binary is the
@@ -31,6 +32,7 @@ jobs:
       version: ${{ steps.promote.outputs.version || steps.version.outputs.value }}
       promote-artifact: ${{ steps.promote.outputs.artifact }}
       promote-run-id: ${{ steps.promote.outputs.run-id }}
+      promote-image-digest: ${{ steps.promote.outputs.image-digest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -60,6 +62,14 @@ jobs:
             exit 1
           fi
           BRANCH_VERSION="${REF#${BRANCH_TYPE}/}"
+          # The prod pipeline can only detect and promote semantic versions
+          # (on-main.yml parses X.Y.Z from the merge commit subject) —
+          # reject other shapes here, before a candidate is built and
+          # staged, not after the merge to main.
+          if [[ ! "$BRANCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::${BRANCH_TYPE^} branch version must be X.Y.Z (got '$BRANCH_VERSION' from '$REF'). Rename the branch, e.g. $BRANCH_TYPE/1.2.1."
+            exit 1
+          fi
           SUFFIX=$([[ "$BRANCH_TYPE" == "hotfix" ]] && echo "hotfix" || echo "patch")
           HEIGHT=$(git rev-list --count HEAD)
           VALUE="$BRANCH_VERSION-$SUFFIX.$HEIGHT"
@@ -86,31 +96,49 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha }}
           DERIVED: ${{ steps.version.outputs.value }}
+          BRANCH_TYPE: ${{ inputs.branch-type }}
         run: |
+          # Provenance check: artifact *names* are forgeable — any workflow
+          # in the repo can upload one called webapp-<sha>. Reuse only an
+          # artifact whose producing run was this branch type's entry
+          # workflow building this exact commit (shared, tested logic:
+          # .github/scripts/find-verified-artifact.sh); anything else is
+          # ignored. Falling through to a rebuild is always safe (same
+          # commit derives the same label).
           NAME="webapp-$SHA"
-          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME" \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          source .github/scripts/find-verified-artifact.sh
+          find_verified_artifact "$NAME" "$SHA" ".github/workflows/on-${BRANCH_TYPE}.yml"
+          RUN_ID="$FVA_RUN_ID"
           if [ -z "$RUN_ID" ]; then
-            echo "No existing artifact for $SHA (push build expired or predates this commit) — will build."
+            echo "No trusted existing artifact for $SHA (push build expired, predates this commit, or failed the provenance check) — will build."
             exit 0
           fi
-          # The build uploads a marker artifact whose name carries the label
-          # the binary was stamped with: <artifact-name>.label.<label>.
-          EXISTING_LABEL=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
-            --jq ".artifacts[].name | select(startswith(\"$NAME.label.\"))" | head -1)
-          EXISTING_LABEL="${EXISTING_LABEL#"$NAME.label."}"
+          # Markers from the verified run — the stamped label (what the
+          # binary reports) and the image digest (what the deploy pins).
+          # One artifact-list fetch serves both; parsing is shared, tested
+          # logic (.github/scripts/run-markers.sh).
+          source .github/scripts/run-markers.sh
+          MARKER_NAMES=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[].name')
+          EXISTING_LABEL=$(marker_value "$MARKER_NAMES" "$NAME.label.") || EXISTING_LABEL=""
           if [ -z "$EXISTING_LABEL" ]; then
             echo "Artifact $NAME exists but carries no label marker (built before markers were introduced) — rebuilding."
+            exit 0
+          fi
+          EXISTING_DIGEST=$(marker_value "$MARKER_NAMES" "$NAME.image.") || EXISTING_DIGEST=""
+          if [ -z "$EXISTING_DIGEST" ]; then
+            echo "Artifact $NAME has no image-digest marker (built before container deploys) — rebuilding."
             exit 0
           fi
           if [ "$EXISTING_LABEL" != "$DERIVED" ]; then
             echo "::warning::Existing artifact is stamped '$EXISTING_LABEL' (derived '$DERIVED' — label derivation changed since the push build). Deploying the binary as what it actually reports."
             echo "⚠️ **Label drift:** existing artifact is stamped \`$EXISTING_LABEL\` but the current derivation yields \`$DERIVED\`. Deploying under the stamped label — push a new commit to adopt the new derivation." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL') from run $RUN_ID — build will be skipped."
+          echo "Reusing existing artifact $NAME (label '$EXISTING_LABEL', image sha256:$EXISTING_DIGEST) from run $RUN_ID — build will be skipped."
           echo "artifact=$NAME" >> $GITHUB_OUTPUT
           echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "version=$EXISTING_LABEL" >> $GITHUB_OUTPUT
+          echo "image-digest=sha256:$EXISTING_DIGEST" >> $GITHUB_OUTPUT
 
   build:
     if: needs.prepare.outputs.promote-run-id == ''
@@ -119,6 +147,9 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
+      # attest: true needs these — provenance attestation on the manifest.
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
@@ -127,20 +158,37 @@ jobs:
       # dispatch will resolve. Commit-keyed name, 90-day retention.
       artifact-name: webapp-${{ inputs.sha }}
       retention-days: 90
+      attest: true
 
-  deploy:
-    if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
+  image:
+    # Push builds stage the image too, so a later dispatch (and the prod
+    # promotion) reuses the exact image digest without rebuilding anything.
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.promote-run-id == '' }}
     needs: [prepare, build]
     permissions:
       id-token: write
+      contents: read
+      attestations: write
+    uses: ./.github/workflows/_image.yml
+    with:
+      # stg identity builds hotfix/support images (Tasks Contributor +
+      # AcrPull on the shared registry).
+      environment: stg
+      build-label: ${{ needs.build.outputs.build-label }}
+      artifact-name: webapp-${{ inputs.sha }}
+      retention-days: 90
+
+  deploy:
+    if: ${{ !failure() && !cancelled() && inputs.event-name == 'workflow_dispatch' }}
+    needs: [prepare, build, image]
+    permissions:
+      id-token: write
       contents: write
-      actions: read
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: stg
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
-      artifact-name: webapp-${{ inputs.sha }}
-      artifact-run-id: ${{ needs.prepare.outputs.promote-run-id }}
+      image-digest: ${{ needs.prepare.outputs.promote-image-digest || needs.image.outputs.image-digest }}
       # stg tags are the prod promotion gate's proof of a green staging
       # deploy and the QA/UAT audit trail.
       tag-deployment: true

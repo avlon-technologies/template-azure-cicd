@@ -1,0 +1,48 @@
+name: CodeQL
+
+# Static analysis for the C# code. Alerts land under Security → Code
+# scanning. Make the "Analyze C#" check required in the develop/main
+# rulesets once it has run at least once. Note: this is "advanced setup" —
+# if the repo has CodeQL *default setup* enabled in Settings → Code
+# security, disable it there or this workflow's uploads are rejected.
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+  schedule:
+    # Weekly sweep so new queries run against unchanged code too.
+    - cron: '26 7 * * 1'
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze C#
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          languages: csharp
+          # No compilation needed — CodeQL scans C# from source. Keeps the
+          # job independent of the SDK/restore pipeline.
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          category: '/language:csharp'

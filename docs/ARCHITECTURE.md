@@ -29,9 +29,9 @@ graph TB
     end
     repo -->|OIDC deploy| azure
     subgraph Azure
-        appdev[App Service: dev]
-        appstg[App Service: stg]
-        appprod[App Service: prod<br/>blue/green slots]
+        appdev[Container App: dev]
+        appstg[Container App: stg]
+        appprod[Container App: prod<br/>blue/green revisions]
     end
     user([API consumer]) -->|HTTPS| appdev
     user -->|HTTPS| appstg
@@ -46,7 +46,7 @@ These hold at every level and are the "why" behind most decisions in the child d
 - **Every deploy is verified.** No deploy reports success until a smoke test confirms the app answers correctly *and* is serving the exact build that was intended. See [C3 — Deploy pipeline](c3-components/README.md).
 - **No long-lived secrets.** Azure authentication is OIDC workload-identity federation; there are no cloud credentials stored in the repo. See [C4 — Deploy identity](c4-code/README.md).
 - **Immutable, auditable releases.** Deployment tags are immutable and record exactly what was tested and shipped. Promotion to prod is gated on proof of a green staging deploy.
-- **Fast, safe rollback.** Production is blue/green: a bad build never reaches users, and the previous build is one slot-swap away.
+- **Fast, safe rollback.** Production is blue/green: a bad build never receives user traffic, and the previous build is one traffic shift away.
 
 ## Related documents
 

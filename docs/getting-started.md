@@ -5,7 +5,7 @@ End-to-end setup: from cloning the template to a verified first deployment. Budg
 By the end you will have:
 
 - The template running in your own GitHub repository
-- Azure App Services for `dev`, `stg`, and `prod`
+- Scale-to-zero Azure Container Apps for `dev`, `stg`, and `prod`
 - Secretless (OIDC) deploy identities, one per environment
 - GitHub environments, variables, and rulesets configured
 - A first automatic deploy to dev
@@ -16,8 +16,9 @@ Related reading: [workload identity federation](workload-identity-federation.md)
 
 | Requirement | Why |
 |---|---|
-| Azure subscription with rights to create resource groups, App Services, user-assigned managed identities, and role assignments | Runtime + deploy identities |
+| Azure subscription with rights to create resource groups, Container Apps, a container registry, user-assigned managed identities, and role assignments | Runtime + deploy identities |
 | GitHub repository admin access | Environments, rulesets, and Actions settings are repo settings, not code |
+| A machine (VM or container host) for the self-hosted deploy runner | Deploy jobs run on it — see [Step 4](#self-hosted-deploy-runner); builds stay on GitHub-hosted runners |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az`), logged in (`az login`) | Identity setup |
 | [.NET 10 SDK](https://dotnet.microsoft.com/download) | Local build and test |
 | [GitHub CLI](https://cli.github.com/) (`gh`) — optional | Used for dispatch commands throughout the docs; the Actions UI works too |
@@ -42,14 +43,15 @@ The reference deployment provisions infrastructure with Terraform in the platfor
 
 | Resource | Requirement | Notes |
 |---|---|---|
-| Resource group | One per environment | Reference naming: `rg-cicd-demo-<env>-cc`. Its name becomes the `RESOURCE_GROUP` environment variable (used by the prod slot-swap commands in `_deploy.yml`) |
-| App Service | Configured for the .NET 10 runtime | Its name becomes the `WEBAPP_NAME` environment variable. Reference naming: `app-cicd-demo-<env>-cc`, on a Linux plan `asp-cicd-demo-<env>-cc` (B1 for dev/stg) |
-| **Prod only:** deployment slot named `staging` | Requires a plan tier that supports slots (reference deployment uses P0v3) | The slot name `staging` is hardcoded in `_deploy.yml` |
+| Resource group | One per environment | Reference naming: `rg-cicd-demo-<env>-cc`. Its name becomes the `RESOURCE_GROUP` environment variable |
+| Container Apps environment + Container App | Consumption plan; the app scale-to-zero (`min_replicas = 0`), ingress target port matching the `Dockerfile` (8080) | The app name becomes the `CONTAINERAPP_NAME` environment variable. Reference naming: `ca-cicd-demo-api-<env>-cc` in `cae-cicd-demo-<env>-cc` |
+| **Prod only:** `Multiple` revision mode | `az containerapp revision set-mode` / Terraform `revision_mode` | Required for the blue/green flow — the pipeline stages a zero-traffic revision and shifts traffic; dev/stg stay `Single` |
+| Container registry (shared) | Any ACR the deploy identities can build into and the apps can pull from | Its name becomes the `ACR_NAME` repo variable; images land in `cicd-demo/api`. The reference deployment uses one shared registry for the whole platform |
 
 Two assumptions worth knowing before you deviate from the defaults:
 
-- **Smoke tests target the default hostnames** `https://<WEBAPP_NAME>.azurewebsites.net` and `https://<WEBAPP_NAME>-staging.azurewebsites.net`. Custom domains or private-endpoint-only apps need `_deploy.yml` edits.
-- The App Services must be reachable from GitHub-hosted runners (public internet) for the smoke tests to pass.
+- **Smoke tests target the Container App's FQDN** (queried at deploy time) — unless the environment defines a `GATEWAY_URL` variable, which the post-deploy smoke test uses instead (for apps whose ingress allowlist only admits the gateway). The prod blue/green flow always smoke-tests the staged revision's own FQDN before any traffic moves.
+- **Deploy jobs run on a self-hosted runner** (`runs-on: [self-hosted]` in `_deploy.yml`), not on GitHub-hosted runners — build, image, and prepare jobs stay on `ubuntu-latest` (image builds are control-plane `az acr build`). The apps' ingress (smoke-test URLs) must be reachable from that runner. Setting the runner up is part of Step 4 below; **without one, every deploy sits in "Queued" forever.**
 
 ## Step 3 — Create the deploy identities
 
@@ -72,9 +74,15 @@ az identity federated-credential create --name "github-cicd-demo-dev" \
   --subject "repo:<owner>/<repo>:environment:dev" \
   --audiences "api://AzureADTokenExchange"
 
-# 3. Website Contributor, scoped to this environment's resource group only
-az role assignment create --assignee "$PRINCIPAL_ID" --role "Website Contributor" \
+# 3. Container Apps Contributor, scoped to this environment's resource group only
+az role assignment create --assignee "$PRINCIPAL_ID" --role "Container Apps Contributor" \
   --scope "/subscriptions/<subscription-id>/resourceGroups/rg-cicd-demo-dev-cc"
+
+# 4. On the shared registry: Tasks Contributor (az acr build) and AcrPull
+#    (digest/metadata reads for build-vs-promote decisions)
+ACR_ID=$(az acr show --name <acr-name> --query id -o tsv)
+az role assignment create --assignee "$PRINCIPAL_ID" --role "Container Registry Tasks Contributor" --scope "$ACR_ID"
+az role assignment create --assignee "$PRINCIPAL_ID" --role "AcrPull" --scope "$ACR_ID"
 ```
 
 Record each managed identity's **client ID** (`$CLIENT_ID`) — you'll need it in the next step. Client IDs are identifiers, not secrets.
@@ -90,10 +98,29 @@ Settings → Environments → create `dev`, `stg`, and `prod`. In each, add **en
 | Variable | Value |
 |---|---|
 | `AZURE_CLIENT_ID` | The client ID of that environment's managed identity (Step 3) |
-| `WEBAPP_NAME` | That environment's App Service name (Step 2) |
-| `RESOURCE_GROUP` | That environment's resource-group name (Step 2) — used by the slot-swap steps in `_deploy.yml` |
+| `CONTAINERAPP_NAME` | That environment's Container App name (Step 2) |
+| `RESOURCE_GROUP` | That environment's resource-group name (Step 2) |
+| `GATEWAY_URL` | *(optional)* Public URL the post-deploy smoke test should use instead of the Container App's FQDN — set it when the app's ingress only admits a gateway/allowlisted sources |
+| `DEPLOY_ALERT_WEBHOOK` | *(optional)* Chat webhook (Slack/Teams-style `{"text": …}` payload) that failed deploys are pushed to. Stored as a variable (unmasked) by accepted trade-off — see [SECURITY.md](../SECURITY.md#known-trade-offs-to-review-when-adopting) |
 
-Optionally add **required reviewers** to the `prod` environment for a human approval gate before production deploys. (The back-merge job runs in parallel with the deploy, so `develop` gets release commits back even while prod waits for approval.)
+On the `prod` environment, additionally configure — these are load-bearing controls the pipeline's security model assumes, not optional hardening:
+
+- **Required reviewers** — the human approval gate in front of every production deploy. Merging the release PR authorizes the *merge*; this gate authorizes the *deployment* (separation of duties).
+- **Deployment branch policy: `main` only** — the platform-level enforcement that no other ref can deploy to prod, regardless of workflow logic.
+
+(The back-merge job runs in parallel with the deploy, so `develop` gets release commits back even while prod waits for approval.)
+
+### Self-hosted deploy runner
+
+`_deploy.yml` runs its deploy job on a **self-hosted runner** so deploys can egress from an IP the App Service deploy surfaces allowlist. Register at least one before your first deploy (Settings → Actions → Runners → New self-hosted runner), and treat it as **privileged infrastructure** — it handles the Azure access token for every environment, including prod:
+
+- The runner machine needs the **Azure CLI (`az`)**, **GitHub CLI (`gh`)**, **`curl`**, and **`jq`** on its PATH (`gh` performs the pre-deploy image attestation verification).
+- **Dedicate it to this repository** (repo-level runner, or an org runner group restricted to this repo). Never share it with repos you trust less.
+- Prefer **ephemeral runners** (`--ephemeral`, one job per registration) or an image-per-job setup so no workspace or credential state survives a job. The pipeline defensively cleans its artifact directory, but ephemerality is the real control.
+- It must be able to reach the App Service deploy endpoints and the smoke-test URLs (`GATEWAY_URL` or the default hostnames).
+- **Running more than one runner?** Give each environment's runner a distinct label and pin deploys to it via `_deploy.yml`'s `runner-labels` input (e.g. pass `'["self-hosted", "prod-deploy"]'` from `on-main.yml`) so prod deploys only ever run on isolated prod runners. The default (`'["self-hosted"]'`) matches any self-hosted runner.
+
+If your App Services are reachable from the public internet and you don't need the allowlist model, you can instead change `runs-on` in `_deploy.yml` back to `ubuntu-latest` — see [customization](customization.md#2-workflow-values).
 
 ### Repository variables
 
@@ -103,6 +130,7 @@ Settings → Secrets and variables → Actions → **Variables** (repository lev
 |---|---|
 | `AZURE_TENANT_ID` | `az account show --query tenantId -o tsv` |
 | `AZURE_SUBSCRIPTION_ID` | `az account show --query id -o tsv` |
+| `ACR_NAME` | The shared container registry's name (Step 2) — `_image.yml` builds into it, `_deploy.yml` deploys digest-pinned images from it |
 
 ### Actions settings
 
@@ -117,8 +145,8 @@ Settings → Rules → Rulesets. These enforce the quality gates the pipeline as
 
 | Ruleset target | Rules |
 |---|---|
-| `develop` | Require a pull request; require the **build / Build & Test** status check |
-| `main` | Require a pull request; require **build / Build & Test** and **Guard main source branch** checks; **allow merge commits only** (disable squash and rebase) |
+| `develop` | Require a pull request; require the **build / Build & Test** status check. Recommended additional required checks once they've run once: **Verify formatting**, **Test workflow scripts**, **Analyze C#** (CodeQL) |
+| `main` | Require a pull request; require **build / Build & Test** and **Guard main source branch** checks; **allow merge commits only** (disable squash and rebase). Same recommended additions as `develop` |
 
 Merge-commit-only on `main` is load-bearing: the prod pipeline reads the release version from the default merge commit subject (`Merge pull request #N from …/release/X.Y.Z`). A squashed or reworded merge fails the prod run by design rather than shipping an untraceable build.
 
@@ -136,9 +164,9 @@ git push
 
 Watch Actions → **CI/CD — Develop → DEV**. The run should: build and test, deploy to your dev App Service, then pass the smoke test (`GET /v1/hello` returns `Hello World!` and `/openapi/v1.json` reports the build label, `YYYYMMDD.<run_number>`).
 
-Verify: open `https://<dev-webapp-name>.azurewebsites.net/swagger` — the page shows the deployed build label, linked commit, and environment name.
+Verify: open `<dev gateway URL or Container App FQDN>/swagger` — the page shows the deployed build label, linked commit, and environment name.
 
-If the run fails, the [troubleshooting table](operations-manual.md#troubleshooting) maps the common failure messages to causes — the most frequent first-run issues are a missing `permissions:` grant (instant `startup_failure`), an App Service that doesn't exist yet, and a federated-credential subject that doesn't exactly match the repo/environment.
+If the run fails, the [troubleshooting table](operations-manual.md#troubleshooting) maps the common failure messages to causes — the most frequent first-run issues are a missing `permissions:` grant (instant `startup_failure`), a deploy job stuck in "Queued" because no self-hosted runner is registered/online, an App Service that doesn't exist yet, and a federated-credential subject that doesn't exactly match the repo/environment.
 
 ## Step 6 — First release to stg and prod
 
@@ -161,7 +189,7 @@ gh pr create --base main --head release/0.1.0 --title "Release 0.1.0"
 gh pr merge --merge      # merge commit — do NOT squash
 ```
 
-The prod run locates the stg-tested artifact for the release head, deploys it to the `staging` slot, smoke-tests, swaps into production, tags `build/prod/0.1.0`, creates GitHub Release `v0.1.0`, and opens a back-merge PR to `develop`.
+The prod run locates the stg-tested candidate for the release head, stages its image digest as a zero-traffic revision, smoke-tests it, shifts traffic into production, tags `build/prod/0.1.0`, creates GitHub Release `v0.1.0`, and opens a back-merge PR to `develop`.
 
 ## Next steps
 
