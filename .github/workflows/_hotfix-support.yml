@@ -113,21 +113,19 @@ jobs:
             echo "No trusted existing artifact for $SHA (push build expired, predates this commit, or failed the provenance check) — will build."
             exit 0
           fi
-          # The build uploads a marker artifact whose name carries the label
-          # the binary was stamped with: <artifact-name>.label.<label>.
-          EXISTING_LABEL=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
-            --jq ".artifacts[].name | select(startswith(\"$NAME.label.\"))" | head -1)
-          EXISTING_LABEL="${EXISTING_LABEL#"$NAME.label."}"
+          # Markers from the verified run — the stamped label (what the
+          # binary reports) and the image digest (what the deploy pins).
+          # One artifact-list fetch serves both; parsing is shared, tested
+          # logic (.github/scripts/run-markers.sh).
+          source .github/scripts/run-markers.sh
+          MARKER_NAMES=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[].name')
+          EXISTING_LABEL=$(marker_value "$MARKER_NAMES" "$NAME.label.") || EXISTING_LABEL=""
           if [ -z "$EXISTING_LABEL" ]; then
             echo "Artifact $NAME exists but carries no label marker (built before markers were introduced) — rebuilding."
             exit 0
           fi
-          # The image job uploads a digest marker (<artifact>.image.<hex>)
-          # — the immutable image the deploy must pin. No marker means the
-          # push predates container deploys: rebuild.
-          EXISTING_DIGEST=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
-            --jq ".artifacts[].name | select(startswith(\"$NAME.image.\"))" | head -1)
-          EXISTING_DIGEST="${EXISTING_DIGEST#"$NAME.image."}"
+          EXISTING_DIGEST=$(marker_value "$MARKER_NAMES" "$NAME.image.") || EXISTING_DIGEST=""
           if [ -z "$EXISTING_DIGEST" ]; then
             echo "Artifact $NAME has no image-digest marker (built before container deploys) — rebuilding."
             exit 0

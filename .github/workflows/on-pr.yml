@@ -32,8 +32,18 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Run provenance-check tests
-        run: bash .github/scripts/find-verified-artifact.test.sh
+      - name: Run workflow-script tests
+        # Every .github/scripts/*.test.sh: provenance check, marker
+        # parsing, and the _deploy.yml step scripts (extracted from the
+        # workflow YAML at test time, so coverage can't drift from the
+        # real code).
+        run: |
+          FAILED=0
+          for t in .github/scripts/*.test.sh; do
+            echo "=== $t"
+            bash "$t" || FAILED=1
+          done
+          exit $FAILED
 
   format:
     name: Verify formatting

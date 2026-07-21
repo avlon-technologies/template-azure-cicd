@@ -108,9 +108,18 @@ jobs:
           fi
           IMAGE="$ACR.azurecr.io/cicd-demo/api@$DIGEST"
           FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
-          # Revision suffix: lowercase alphanumerics and '-' only. Labels
-          # are already charset-restricted upstream; dots become dashes.
+          if [ -z "$FQDN" ]; then
+            echo "::error::Could not resolve the Container App's ingress FQDN — is '$APP' provisioned with ingress in '$RG'?"
+            exit 1
+          fi
+          # Revision suffix: lowercase alphanumerics and '-' only (verified
+          # against a live app: a leading digit is accepted). Labels are
+          # already charset-restricted upstream; dots become dashes.
           SUFFIX=$(echo "$LABEL" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+          if [ -z "$SUFFIX" ]; then
+            echo "::error::Build label '$LABEL' sanitized to an empty revision suffix."
+            exit 1
+          fi
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "fqdn=$FQDN" >> "$GITHUB_OUTPUT"
           echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
@@ -154,8 +163,9 @@ jobs:
           SUFFIX: ${{ steps.target.outputs.suffix }}
         run: |
           REV="$APP--$SUFFIX"
+          ERR="${RUNNER_TEMP:-/tmp}/revision-show-err"
           if EXISTING=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$REV" \
-              --query 'properties.template.containers[0].image' -o tsv 2>/dev/null); then
+              --query 'properties.template.containers[0].image' -o tsv 2>"$ERR"); then
             # Same label staged before (re-run, or rollback to a version
             # whose revision still exists). Safe only if it is the same
             # pinned image — a mismatch means a label collision.
@@ -166,6 +176,14 @@ jobs:
             az containerapp revision activate -n "$APP" -g "$RG" --revision "$REV" 2>/dev/null || true
             echo "Reusing existing revision $REV (same image)."
           else
+            # Only a genuine "revision doesn't exist" may fall through to
+            # creating one — a transient CLI/ARM failure must not
+            # masquerade as first-time staging.
+            if ! grep -qiE 'not.?found|does not exist' "$ERR"; then
+              echo "::error::Could not determine whether revision $REV exists:"
+              cat "$ERR"
+              exit 1
+            fi
             az containerapp update -n "$APP" -g "$RG" --image "$IMAGE" --revision-suffix "$SUFFIX" --output none
           fi
           REV_FQDN=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$REV" --query properties.fqdn -o tsv)

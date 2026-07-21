@@ -162,12 +162,14 @@ jobs:
             ".github/workflows/on-release.yml .github/workflows/on-hotfix.yml .github/workflows/on-support.yml"
           if [ -n "$FVA_RUN_ID" ]; then
             # The digest marker from the verified run is the immutable
-            # image prod will pin. Missing marker = the candidate predates
-            # container deploys — prod never falls back, so fail with the
-            # re-staging instruction.
-            DIGEST=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FVA_RUN_ID/artifacts?per_page=100" \
-              --jq ".artifacts[].name | select(startswith(\"$NAME.image.\"))" | head -1)
-            DIGEST="${DIGEST#"$NAME.image."}"
+            # image prod will pin (shared, tested parsing:
+            # .github/scripts/run-markers.sh). Missing marker = the
+            # candidate predates container deploys — prod never falls
+            # back, so fail with the re-staging instruction.
+            source .github/scripts/run-markers.sh
+            MARKER_NAMES=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FVA_RUN_ID/artifacts?per_page=100" \
+              --jq '.artifacts[].name')
+            DIGEST=$(marker_value "$MARKER_NAMES" "$NAME.image.") || DIGEST=""
             if [ -z "$DIGEST" ]; then
               echo "::error::The stg-tested candidate for $RELEASE_SHA has no image-digest marker (built before container deploys). Re-dispatch the release/hotfix/support pipeline on the source branch to stage a fresh containerized candidate, verify staging, then re-run this workflow."
               exit 1
