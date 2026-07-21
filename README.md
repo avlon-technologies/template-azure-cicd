@@ -26,7 +26,8 @@ This template answers all of them with plain GitHub Actions workflows you can re
 - **Blue/green production deploys** — the artifact lands in a staging slot, is smoke-tested there, then swapped into production. A failed post-swap smoke test automatically swaps the previous build back.
 - **Secretless Azure auth** — OIDC workload identity federation with one scoped deploy identity per environment. There are no repository secrets at all.
 - **Full release lifecycle** — gitflow-style release, hotfix, and support branches; automatic version detection from merge commits; immutable `build/<env>/<label>` audit tags; GitHub Releases; automated back-merge/backport PRs to `develop`.
-- **Hardened workflows** — actions pinned to commit SHAs (Dependabot-maintained), least-privilege job permissions, injection-safe input handling, per-environment concurrency groups.
+- **Hardened workflows** — actions pinned to commit SHAs (Dependabot-maintained), least-privilege job permissions, injection-safe input handling, per-environment concurrency groups, per-job timeouts.
+- **Verifiable supply chain** — locked dependency restore (`packages.lock.json` + `--locked-mode`), a signed build-provenance attestation on every deployable artifact's manifest (verified before every deploy), an SBOM per deployable build, CodeQL static analysis, and a scheduled release-reconciliation audit that catches silently superseded prod runs.
 
 ## How a change reaches production
 
@@ -179,6 +180,8 @@ Two reusable workflows (prefixed `_`) implement the mechanisms; branch-triggered
 | `on-main.yml` | Push to `main`; manual dispatch | Promote the stg-tested artifact to **prod** (blue/green), tag, create the GitHub Release, open the back-merge PR. Dispatch input `version` redeploys/rolls back to any released version within artifact retention |
 | `_build.yml` | Called | Restore, build (stamping the label into `InformationalVersion`), test (published as a PR check), publish, upload artifact |
 | `_deploy.yml` | Called | Download artifact, OIDC login, deploy (direct or slot→smoke→swap), smoke-test, write run summary, tag the deployment. Runs on the self-hosted deploy runner; notifies `DEPLOY_ALERT_WEBHOOK` on failure if set |
+| `codeql.yml` | PRs, `develop` pushes, weekly | CodeQL static analysis for the C# code (alerts under Security → Code scanning) |
+| `reconcile-releases.yml` | Weekday schedule; manual dispatch | Audits recent `main` merges for versions whose prod run was silently superseded (no `build/prod/*` tag, no Release) and fails/alerts with recovery commands |
 | `show-oidc-token.yml` | Manual dispatch | Prints the decoded OIDC token claims for learning/debugging (minted with a non-Azure audience, so it can't be exchanged for access) |
 
 Deploys to the same environment serialize via concurrency groups (`deploy-dev` / `deploy-stg` / `deploy-prod`); superseded PR builds are cancelled.

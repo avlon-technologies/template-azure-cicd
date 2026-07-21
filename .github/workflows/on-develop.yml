@@ -66,9 +66,13 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
+      # attest: true needs these — provenance attestation on the manifest.
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.build-label }}
+      attest: true
 
   deploy:
     needs: [prepare, build]

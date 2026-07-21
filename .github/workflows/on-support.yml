@@ -28,6 +28,8 @@ jobs:
       actions: read
       checks: write
       pull-requests: write
+      # _build.yml's provenance attestation (attest: true) needs this.
+      attestations: write
     uses: ./.github/workflows/_hotfix-support.yml
     with:
       branch-type: support

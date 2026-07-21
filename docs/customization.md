@@ -29,6 +29,10 @@ The pipeline's one hard contract with the application is worth understanding fir
 | Branch names | Workflow `on.push.branches` triggers, `on-pr.yml` guard, `on-main.yml` version regex (`release|hotfix|support`) | Only if your branch model differs. The version-detection regex and the ruleset configuration must stay in agreement with the triggers |
 | Trusted artifact producers | The workflow paths passed to `find_verified_artifact` in `on-main.yml`, `on-release.yml`, and `_hotfix-support.yml` (shared logic: `.github/scripts/find-verified-artifact.sh`) | **Renaming or adding an stg entry workflow must update these lists** — the provenance check refuses artifacts from unlisted workflows (prod fails loudly; stg falls back to a rebuild). Deliberately hardcoded in reviewed workflow code, never a repo variable: a mutable setting would let anyone with variables-write extend the trust boundary |
 | Concurrency groups | `deploy-dev` / `deploy-stg` / `deploy-prod` in the entry workflows | Keep — they serialize deploys per environment |
+| Dependency locks | `packages.lock.json` per project (from `RestorePackagesWithLockFile` in `Directory.Build.props`); CI restores `--locked-mode` | After adding or bumping a package, run `dotnet restore` and commit the updated lock files — CI fails (NU1004) if they drift. Never delete them to silence the error |
+| SDK pin | `global.json` (10.0.1xx, `rollForward: latestFeature`) | Keep in step with `dotnet-version` in `_build.yml` and the App Service runtime stack |
+| Artifact attestation | `_build.yml` (`attest` input, `SHA256SUMS` manifest, SBOM) and the "Verify artifact integrity and provenance" step in `_deploy.yml` | Every deployable build is attested and every deploy verifies before touching Azure. If you fork the build workflow under a new filename, update the `--signer-workflow` path in `_deploy.yml` |
+| Format / CodeQL gates | `format` job in `on-pr.yml` (`dotnet format cicd-demo.sln`); `codeql.yml` (`languages: csharp`) | Update the solution path if renamed; swap the CodeQL language for non-.NET workloads. Add both as required checks in the rulesets once they've run |
 
 ## 3. The smoke-test contract
 

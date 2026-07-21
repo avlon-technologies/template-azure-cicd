@@ -140,6 +140,9 @@ jobs:
       contents: read
       checks: write
       pull-requests: write
+      # attest: true needs these — provenance attestation on the manifest.
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
@@ -148,6 +151,7 @@ jobs:
       # dispatch will resolve. Commit-keyed name, 90-day retention.
       artifact-name: webapp-${{ github.sha }}
       retention-days: 90
+      attest: true
 
   deploy:
     # Only deploy when the release coordinator manually dispatches — not on every push.
