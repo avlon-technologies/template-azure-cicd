@@ -25,6 +25,17 @@ on:
         description: Build label the image is tagged with (alongside sha-<sha>)
         type: string
         required: true
+      image-repository:
+        description: >
+          Registry repository the image is pushed to and attested under
+          (e.g. cicd-demo/api). The digest marker, the deploy-time
+          attestation subject, and _deploy.yml's verify step all key off
+          this. Required and never defaulted: callers thread it from the
+          IMAGE_REPOSITORY repo variable, and an empty value fails the build
+          (see the "Build and push image" guard) rather than silently
+          shipping an unintended repository.
+        type: string
+        required: true
       artifact-name:
         description: >
           Publish artifact (from _build.yml, same run) to package. Also
@@ -76,30 +87,36 @@ jobs:
       - name: Build and push image (az acr build)
         env:
           ACR: ${{ vars.ACR_NAME }}
+          REPO: ${{ inputs.image-repository }}
           LABEL: ${{ inputs.build-label }}
           SHA: ${{ github.sha }}
         run: |
+          if [ -z "$REPO" ]; then
+            echo "::error::image-repository is empty — set the IMAGE_REPOSITORY repository variable. Refusing to build with an unqualified image name."
+            exit 1
+          fi
           # Minimal context: the Dockerfile plus the tested publish output.
           mkdir -p "$RUNNER_TEMP/ctx"
           cp Dockerfile "$RUNNER_TEMP/ctx/"
           cp -r publish "$RUNNER_TEMP/ctx/publish"
           az acr build --registry "$ACR" \
-            --image "cicd-demo/api:sha-$SHA" \
-            --image "cicd-demo/api:$LABEL" \
+            --image "$REPO:sha-$SHA" \
+            --image "$REPO:$LABEL" \
             "$RUNNER_TEMP/ctx"
 
       - name: Resolve image digest
         id: digest
         env:
           ACR: ${{ vars.ACR_NAME }}
+          REPO: ${{ inputs.image-repository }}
           SHA: ${{ github.sha }}
         run: |
           # az acr repository show --image returns the tag's attributes
           # (its `az acr manifest show` cousin returns the raw manifest,
           # which has no digest field — and is a preview command besides).
-          DIGEST=$(az acr repository show --name "$ACR" --image "cicd-demo/api:sha-$SHA" --query digest -o tsv)
+          DIGEST=$(az acr repository show --name "$ACR" --image "$REPO:sha-$SHA" --query digest -o tsv)
           if [ -z "$DIGEST" ]; then
-            echo "::error::Could not resolve the digest for cicd-demo/api:sha-$SHA — the acr build did not push?"
+            echo "::error::Could not resolve the digest for $REPO:sha-$SHA — the acr build did not push?"
             exit 1
           fi
           echo "Image digest: $DIGEST"
@@ -111,7 +128,7 @@ jobs:
       - name: Attest image provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-name: ${{ vars.ACR_NAME }}.azurecr.io/cicd-demo/api
+          subject-name: ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.image-repository }}
           subject-digest: ${{ steps.digest.outputs.value }}
           push-to-registry: false
 

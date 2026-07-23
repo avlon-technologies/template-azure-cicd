@@ -50,13 +50,19 @@ export PATH="$WORK/bin:$PATH"
 
 : > "$OUT"
 GOOD="sha256:$(printf 'a%.0s' {1..64})"
-(export GITHUB_OUTPUT="$OUT" ACR=stubacr SHA=abc STUB_DIGEST="$GOOD"; bash -e "$DIGEST") > /dev/null
+(export GITHUB_OUTPUT="$OUT" ACR=stubacr REPO=cicd-demo/api SHA=abc STUB_DIGEST="$GOOD"; bash -e "$DIGEST") > /dev/null
 check "digest resolved and output" "$(grep '^value=' "$OUT" | cut -d= -f2)" "$GOOD"
 check "bare hex emitted for artifact-safe marker names" "$(grep '^hex=' "$OUT" | cut -d= -f2)" "${GOOD#sha256:}"
 
 : > "$OUT"
-(export GITHUB_OUTPUT="$OUT" ACR=stubacr SHA=abc STUB_DIGEST=""; bash -e "$DIGEST") > /dev/null 2>&1 \
+(export GITHUB_OUTPUT="$OUT" ACR=stubacr REPO=cicd-demo/api SHA=abc STUB_DIGEST=""; bash -e "$DIGEST") > /dev/null 2>&1 \
   && note "empty digest fails the job" no \
   || note "empty digest fails the job" yes
+
+## _image.yml: Build and push image — empty-repo guard -----------------------
+BUILD=$(extract_step .github/workflows/_image.yml image 'Build and push image (az acr build)')
+(export RUNNER_TEMP="$WORK" ACR=stubacr REPO="" LABEL=1.0.0 SHA=abc; bash -e "$BUILD") > /dev/null 2>&1 \
+  && note "empty image-repository fails the build (no unqualified image)" no \
+  || note "empty image-repository fails the build (no unqualified image)" yes
 
 finish

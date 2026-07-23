@@ -62,7 +62,7 @@ GOOD_DIGEST="sha256:$(printf '0%.0s' {1..63})a"
 
 ## Resolve deployment target
 TARGET=$(extract_step .github/workflows/_deploy.yml deploy 'Resolve deployment target')
-BASE=(APP=app RG=rg ACR=myacr LABEL=1.22.0-Build.187)
+BASE=(APP=app RG=rg ACR=myacr REPO=cicd-demo/api LABEL=1.22.0-Build.187)
 
 if run_step "$TARGET" "${BASE[@]}" DIGEST="$GOOD_DIGEST"; then
   grep -q "suffix=1-22-0-build-187" "$STUB/out" && grep -q "image=myacr.azurecr.io/cicd-demo/api@$GOOD_DIGEST" "$STUB/out" \
@@ -76,6 +76,7 @@ run_step "$TARGET" "${BASE[@]}" DIGEST="latest" && note "tag instead of digest r
 run_step "$TARGET" "${BASE[@]}" DIGEST="" && note "empty digest rejected" no || note "empty digest rejected" yes
 run_step "$TARGET" "${BASE[@]}" DIGEST="${GOOD_DIGEST^^}" && note "uppercase-hex digest rejected" no || note "uppercase-hex digest rejected" yes
 run_step "$TARGET" "${BASE[@]}" DIGEST="$GOOD_DIGEST" STUB_FQDN="" && note "empty FQDN fails fast" no || note "empty FQDN fails fast" yes
+run_step "$TARGET" "${BASE[@]}" REPO="" DIGEST="$GOOD_DIGEST" && note "empty image-repository fails fast (no unqualified deploy)" no || note "empty image-repository fails fast (no unqualified deploy)" yes
 
 ## Stage new revision (zero traffic)
 STAGE=$(extract_step .github/workflows/_deploy.yml deploy 'Stage new revision (zero traffic)')

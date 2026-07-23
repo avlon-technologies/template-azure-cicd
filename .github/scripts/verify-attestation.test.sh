@@ -50,7 +50,7 @@ run_step() { # [ENV=val ...] — runs the step under the workflow's bash -e
   : > "$STUB_LOG"
   rm -f "$STUB_CAPTURE"
   ( export RUNNER_TEMP="$STUB" GITHUB_REPOSITORY="example/repo" GH_TOKEN=dummy \
-      ACR=myacr DIGEST="$DIGEST" "$@"
+      ACR=myacr REPO=cicd-demo/api DIGEST="$DIGEST" "$@"
     bash -e "$VERIFY" ) > "$STUB/stdout" 2>&1
 }
 

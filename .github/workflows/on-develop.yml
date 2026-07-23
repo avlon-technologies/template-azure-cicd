@@ -84,6 +84,7 @@ jobs:
     with:
       environment: dev
       build-label: ${{ needs.build.outputs.build-label }}
+      image-repository: ${{ vars.IMAGE_REPOSITORY }}
 
   deploy:
     needs: [prepare, build, image]
@@ -95,5 +96,6 @@ jobs:
       environment: dev
       build-label: ${{ needs.build.outputs.build-label }}
       image-digest: ${{ needs.image.outputs.image-digest }}
+      image-repository: ${{ vars.IMAGE_REPOSITORY }}
       # No tag-deployment: dev deploys are disposable; the Deployments view
       # and run history are the record.

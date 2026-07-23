@@ -46,7 +46,7 @@ The reference deployment provisions infrastructure with Terraform in the platfor
 | Resource group | One per environment | Reference naming: `rg-cicd-demo-<env>-cc`. Its name becomes the `RESOURCE_GROUP` environment variable |
 | Container Apps environment + Container App | Consumption plan; the app scale-to-zero (`min_replicas = 0`), ingress target port matching the `Dockerfile` (8080) | The app name becomes the `CONTAINERAPP_NAME` environment variable. Reference naming: `ca-cicd-demo-api-<env>-cc` in `cae-cicd-demo-<env>-cc` |
 | **Prod only:** `Multiple` revision mode | `az containerapp revision set-mode` / Terraform `revision_mode` | Required for the blue/green flow — the pipeline stages a zero-traffic revision and shifts traffic; dev/stg stay `Single` |
-| Container registry (shared) | Any ACR the deploy identities can build into and the apps can pull from | Its name becomes the `ACR_NAME` repo variable; images land in `cicd-demo/api`. The reference deployment uses one shared registry for the whole platform |
+| Container registry (shared) | Any ACR the deploy identities can build into and the apps can pull from | Its name becomes the `ACR_NAME` repo variable; images land in the repository named by the `IMAGE_REPOSITORY` repo variable (reference: `cicd-demo/api`). The reference deployment uses one shared registry for the whole platform |
 
 Two assumptions worth knowing before you deviate from the defaults:
 
@@ -131,6 +131,7 @@ Settings → Secrets and variables → Actions → **Variables** (repository lev
 | `AZURE_TENANT_ID` | `az account show --query tenantId -o tsv` |
 | `AZURE_SUBSCRIPTION_ID` | `az account show --query id -o tsv` |
 | `ACR_NAME` | The shared container registry's name (Step 2) — `_image.yml` builds into it, `_deploy.yml` deploys digest-pinned images from it |
+| `IMAGE_REPOSITORY` | The registry repository the image is built, tagged, attested, and deployed under (reference: `cicd-demo/api`). **Required, no default** — the entry workflows thread it into `_image.yml`/`_deploy.yml`, and an unset/empty value fails the build and the deploy fast rather than shipping an unintended repository |
 
 ### Actions settings
 

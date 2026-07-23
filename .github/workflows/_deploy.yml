@@ -28,6 +28,17 @@ on:
           bytes the trusted pipeline built.
         type: string
         required: true
+      image-repository:
+        description: >
+          Registry repository the digest lives in (e.g. cicd-demo/api) —
+          must match what _image.yml built and attested. Used to form the
+          digest-pinned image reference and the attestation-verify subject.
+          Required and never defaulted: callers thread it from the
+          IMAGE_REPOSITORY repo variable, and an empty value fails the
+          deploy (see the "Resolve deployment target" guard) rather than
+          deploying against an unintended repository.
+        type: string
+        required: true
       traffic-shift:
         description: >
           Blue/green via Container Apps revisions (requires the app in
@@ -99,14 +110,19 @@ jobs:
           APP: ${{ vars.CONTAINERAPP_NAME }}
           RG: ${{ vars.RESOURCE_GROUP }}
           ACR: ${{ vars.ACR_NAME }}
+          REPO: ${{ inputs.image-repository }}
           DIGEST: ${{ inputs.image-digest }}
           LABEL: ${{ inputs.build-label }}
         run: |
+          if [ -z "$REPO" ]; then
+            echo "::error::image-repository is empty — set the IMAGE_REPOSITORY repository variable. Refusing to deploy with an unqualified image name."
+            exit 1
+          fi
           if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::image-digest '$DIGEST' is not a sha256:<hex> digest — refusing to deploy an unpinned image."
             exit 1
           fi
-          IMAGE="$ACR.azurecr.io/cicd-demo/api@$DIGEST"
+          IMAGE="$ACR.azurecr.io/$REPO@$DIGEST"
           FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
           if [ -z "$FQDN" ]; then
             echo "::error::Could not resolve the Container App's ingress FQDN — is '$APP' provisioned with ingress in '$RG'?"
@@ -138,6 +154,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ACR: ${{ vars.ACR_NAME }}
+          REPO: ${{ inputs.image-repository }}
           DIGEST: ${{ inputs.image-digest }}
         run: |
           TOKEN=$(az acr login --name "$ACR" --expose-token --output tsv --query accessToken)
@@ -146,7 +163,7 @@ jobs:
           printf '{"auths":{"%s.azurecr.io":{"auth":"%s"}}}' "$ACR" \
             "$(printf '00000000-0000-0000-0000-000000000000:%s' "$TOKEN" | base64 -w0)" \
             > "$DOCKER_CONFIG/config.json"
-          gh attestation verify "oci://$ACR.azurecr.io/cicd-demo/api@$DIGEST" \
+          gh attestation verify "oci://$ACR.azurecr.io/$REPO@$DIGEST" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/_image.yml"
           rm -rf "$DOCKER_CONFIG"
@@ -306,6 +323,7 @@ jobs:
       - name: Output deployment URL
         env:
           URL: ${{ vars.GATEWAY_URL || format('https://{0}', steps.target.outputs.fqdn) }}
+          REPO: ${{ inputs.image-repository }}
           DIGEST: ${{ inputs.image-digest }}
         run: |
           echo "Deployed ${{ inputs.build-label }} to ${{ inputs.environment }}: $URL"
@@ -317,7 +335,7 @@ jobs:
             echo "| App | $URL |"
             echo "| Swagger | $URL/swagger |"
             echo "| API | $URL/v1/hello |"
-            echo "| Image | \`cicd-demo/api@$DIGEST\` |"
+            echo "| Image | \`$REPO@$DIGEST\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tag deployment
