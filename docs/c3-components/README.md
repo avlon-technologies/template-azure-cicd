@@ -69,7 +69,7 @@ graph TB
     end
     subgraph reusable [Reusable workflows «mechanism»]
         build[_build<br/>build · test · publish · upload]
-        deploy[_deploy<br/>download · login · deploy · smoke · swap · tag]
+        deploy[_deploy<br/>login · verify attestation · deploy · smoke · shift · tag]
     end
     prep[Version resolution & validation<br/>per-flow prepare jobs]
     promote[Artifact promotion & gating<br/>find webapp-&lt;sha&gt; · require build/stg tag]
@@ -87,9 +87,9 @@ graph TB
 | Component | Lives in | Responsibility |
 |---|---|---|
 | **Build & Test** | `_build.yml` | Restore, build (stamping the build label into `InformationalVersion`), test (publishing results as a PR check), publish, and upload the artifact. Emits the resolved `build-label`. Fails the run if any test fails. |
-| **Deploy** | `_deploy.yml` | Download the artifact, OIDC-login to Azure, deploy (direct, or slot→smoke→swap for prod), **smoke-test** (`/v1/hello` + version assertion), print the run-summary card, and tag the deployed commit. Auto-swaps back on a failed post-swap smoke test. |
+| **Deploy** | `_deploy.yml` | OIDC-login to Azure, verify the image digest's build-provenance attestation, deploy the digest-pinned image (in-place, or zero-traffic revision→smoke→traffic shift for prod), **smoke-test** (`/v1/hello` + version assertion), print the run-summary card, and tag the deployed commit. Auto-shifts traffic back on a failed post-shift smoke test. |
 | **Version resolution & validation** | `prepare` jobs in entry workflows | Turn a branch + optional input into a build label, and reject labels that don't match the branch (e.g. `1.2.0-rc.1` from `release/1.3.0`). Keeps staging from ever being stamped with a version that doesn't belong to its branch. |
-| **Artifact promotion & gating** | `on-main.yml` + `_deploy.yml` inputs | On merge to `main`, locate the `webapp-<sha>` artifact for the release head, **require a `build/stg/*` tag** (proof of a green staging deploy), and deploy *that binary* with the build job skipped. Missing artifact or missing tag → the prod run fails rather than rebuilding untested source. |
+| **Artifact promotion & gating** | `on-main.yml` + `_deploy.yml` inputs | On merge to `main`, locate the `webapp-<sha>` artifact for the release head, **require a `build/stg/*` tag** (proof of a green staging deploy), and deploy *the exact image digest its marker records* with the build and image jobs skipped. Missing artifact or missing tag → the prod run fails rather than rebuilding untested source. |
 | **Branch policy** | entry workflows (`on-*.yml`) | Map trigger branch → environment, wire concurrency groups (serialize deploys per env), and set the correct permissions/flags. This is where "develop is auto-deployed but release is dispatch-gated" is decided. |
 | **Release finalization** | `on-main.yml` release job | After a prod deploy: create the GitHub Release `vX.Y.Z` and open a back-merge PR to `develop` so stabilization fixes aren't lost. |
 
@@ -110,9 +110,9 @@ Every deploy — dev, stg, and prod — ends the same way:
 ```mermaid
 sequenceDiagram
     participant P as Deploy job
-    participant A as App Service
-    P->>A: deploy artifact
-    loop up to 12× (10s apart)
+    participant A as Container App
+    P->>A: deploy digest-pinned image
+    loop up to 15× (10s apart)
         P->>A: GET /v1/hello
         A-->>P: "Hello World!"?
         P->>A: GET /openapi/v1.json → info.version
@@ -121,15 +121,15 @@ sequenceDiagram
     alt healthy
         P->>P: success (prod: tag build/<env>/<label>)
     else timeout
-        P->>P: fail (prod post-swap: swap previous build back)
+        P->>P: fail (prod post-shift: shift traffic back to the previous revision)
     end
 ```
 
-A mismatch is treated as "not ready yet" (the old build may still be warming down) and only fails on timeout — which also cleanly handles the blue/green warm-up window.
+A mismatch is treated as "not ready yet" (the old build may still be warming down) and only fails on timeout — which also cleanly absorbs scale-to-zero cold starts and the blue/green warm-up window.
 
 ## Key decisions at this level
 
-- **Mechanism vs. policy split.** `_build`/`_deploy` know *how*; `on-*` workflows know *when/where*. New branch flows reuse the mechanisms without duplicating deploy logic, and the deploy contract (smoke test, tagging, swap-back) is defined once.
+- **Mechanism vs. policy split.** `_build`/`_deploy` know *how*; `on-*` workflows know *when/where*. New branch flows reuse the mechanisms without duplicating deploy logic, and the deploy contract (smoke test, tagging, shift-back) is defined once.
 - **Version identity is threaded end-to-end.** The label is chosen at build, compiled into the binary, asserted at deploy, and written as an immutable tag. There is no point in the pipeline where "which build is this?" is ambiguous.
 - **Promotion is gated on proof, not trust.** Prod won't ship a binary unless a `build/stg/*` tag proves it went green on staging. "Stg-tested" is a verified fact recorded in git, not an assumption.
-- **Blue/green + auto-swap-back is a component responsibility, not an operator's.** The pipeline itself restores the previous prod build on a failed post-swap smoke test; recovery doesn't wait for a human.
+- **Blue/green + auto-shift-back is a component responsibility, not an operator's.** The pipeline itself shifts traffic back to the previous prod revision on a failed post-shift smoke test; recovery doesn't wait for a human.

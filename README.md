@@ -148,14 +148,14 @@ Settings → Environments — create `dev`, `stg`, and `prod`, each with:
 | Variable | Value |
 |---|---|
 | `AZURE_CLIENT_ID` | Client ID of that environment's deploy managed identity |
-| `WEBAPP_NAME` | That environment's App Service name |
-| `RESOURCE_GROUP` | That environment's resource-group name (used by the slot-swap steps) |
+| `CONTAINERAPP_NAME` | That environment's Container App name |
+| `RESOURCE_GROUP` | That environment's resource-group name |
 | `GATEWAY_URL` | *(optional)* URL the post-deploy smoke test uses instead of the app hostname (gateway-only ingress) |
 | `DEPLOY_ALERT_WEBHOOK` | *(optional)* Chat webhook that failed deploys are pushed to |
 
 The deploy job's `environment:` declaration scopes these variables, so the entry workflows carry no per-environment configuration. On `prod`, additionally configure **required reviewers** and a **deployment branch policy (`main` only)** — the human approval gate and branch restriction on production deploys are part of the security model, not optional hardening.
 
-Deploy jobs run on a **self-hosted runner** (`runs-on: [self-hosted]` in `_deploy.yml`) so deploys egress from an IP the App Service deploy surfaces can allowlist — register one before your first deploy ([setup and hardening guidance](docs/getting-started.md#self-hosted-deploy-runner)). Build and PR jobs stay on GitHub-hosted runners.
+Deploy jobs run on a **self-hosted runner** (`runs-on: [self-hosted]` in `_deploy.yml`) so the smoke tests egress from an IP the Container App's ingress allowlist admits — register one before your first deploy ([setup and hardening guidance](docs/getting-started.md#self-hosted-deploy-runner)). Build and PR jobs stay on GitHub-hosted runners.
 
 ### Repository settings
 
@@ -211,7 +211,7 @@ The reference deployment names resources `<type>-cicd-demo-<env>-cc` (e.g. `rg-c
 ## Maintenance
 
 - **Dependencies:** Dependabot ([config](.github/dependabot.yml)) opens weekly PRs for NuGet packages and Actions SHA pins. When bumping an action manually, update the SHA **and** its `# vX.Y.Z` comment together.
-- **.NET upgrades:** update `Directory.Build.props` (`TargetFramework`), the `dotnet-version` in `_build.yml`, and package versions in the two `.csproj` files; the App Service runtime stack must match.
+- **.NET upgrades:** update `Directory.Build.props` (`TargetFramework`), the `dotnet-version` in `_build.yml`, and package versions in the two `.csproj` files; the `Dockerfile`'s base image (`mcr.microsoft.com/dotnet/aspnet`) must match.
 - **Template upgrades:** if you adopted this template, pull upstream workflow changes selectively — your customized values (names, URLs, smoke tests) live in the files listed in [customization](docs/customization.md), so diff those carefully.
 
 ## Contributing
@@ -220,4 +220,4 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the bra
 
 ## License
 
-This repository does not currently include a license file. Until one is added, the code is under default copyright — open an issue if you need clarity on reuse terms.
+Licensed under the [MIT License](LICENSE).

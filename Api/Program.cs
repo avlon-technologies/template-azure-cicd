@@ -62,7 +62,7 @@ var app = builder.Build();
 // A path-prefixing reverse proxy or gateway can serve the API under a
 // prefix it forwards as-is (PATH_BASE, e.g. /cicd-demo). UsePathBase strips
 // the prefix when present and does nothing when absent, so direct traffic
-// (*.azurewebsites.net, custom domains, local dev) is unaffected.
+// (the Container App's FQDN, custom domains, local dev) is unaffected.
 var pathBase = app.Configuration["PATH_BASE"];
 if (!string.IsNullOrEmpty(pathBase))
 {

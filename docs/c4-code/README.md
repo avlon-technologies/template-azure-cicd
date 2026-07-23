@@ -13,12 +13,12 @@ The deepest zoom: how the key components are actually implemented. C4 keeps this
 | Element | File | Realizes (C3 component) |
 |---|---|---|
 | Application composition root | `Api/Program.cs` | The entire API application |
-| Test-visibility shim | `Api/Program.cs:90` | app↔test contract |
+| Test-visibility shim | `Api/Program.cs:110` | app↔test contract |
 | Endpoint contract tests | `Api.Test/HelloWorldEndpointTests.cs` | verification of the API surface |
-| Build labelling | `.github/workflows/_build.yml:49-60,78-88` | Build & Test |
-| Smoke-test + swap-back | `.github/workflows/_deploy.yml:102-179` | Deploy verification contract |
-| Immutable tagging | `.github/workflows/_deploy.yml:196-227` | Artifact gating / audit trail |
-| Secretless login | `.github/workflows/_deploy.yml:80-85` | Deploy identity |
+| Build labelling | `.github/workflows/_build.yml:70-76,100-112` | Build & Test |
+| Smoke-test + shift-back | `.github/workflows/_deploy.yml:237-321` | Deploy verification contract |
+| Immutable tagging | `.github/workflows/_deploy.yml:341-375` | Artifact gating / audit trail |
+| Secretless login | `.github/workflows/_deploy.yml:100-105` | Deploy identity |
 
 ---
 
@@ -29,13 +29,10 @@ The whole application is one file: a minimal-API startup that wires services, th
 ### 1.1 Build Info Reader — the self-identifying build
 
 ```csharp
-// Api/Program.cs:10-18
-var informationalVersion = Assembly.GetExecutingAssembly()
+// Api/Program.cs:12-15 (helpers in Api/BuildInfo.cs)
+var (buildLabel, commitSha) = BuildInfo.Split(assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-    .InformationalVersion ?? "unknown";
-var labelAndSha = informationalVersion.Split('+', 2);
-var buildLabel = labelAndSha[0];
-var commitSha = labelAndSha.Length > 1 ? labelAndSha[1] : null;
+    .InformationalVersion);
 ```
 
 The .NET SDK appends the commit SHA to `InformationalVersion` as SemVer build metadata (`<label>+<sha>`). Splitting on `+` recovers the two halves: `buildLabel` becomes the displayed/asserted version, `commitSha` becomes a linked commit reference in the description. **This is the source end of the app↔pipeline contract** — the value the smoke test later asserts against.
@@ -88,7 +85,7 @@ app.UseSwaggerUI(...);     // /swagger
 ### 1.5 The test-visibility shim — don't delete this
 
 ```csharp
-// Api/Program.cs:90
+// Api/Program.cs:110
 public partial class Program { }
 ```
 
@@ -118,11 +115,11 @@ The OpenAPI test asserts the *shape* of the stamped document (`:56-59`), so a re
 The label is resolved once and stamped into the assembly **at build time** (publish runs `--no-build`, so a later stamp would be too late):
 
 ```yaml
-# _build.yml:49-60 — resolve the label (explicit input, else date-based)
+# _build.yml:70-76 — resolve the label (explicit input, else date-based)
 if [ -n "$INPUT_VERSION" ]; then echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
 else echo "value=$(date +'%Y%m%d').$RUN_NUMBER" >> "$GITHUB_OUTPUT"; fi
 
-# _build.yml:83-88 — compile it into InformationalVersion
+# _build.yml:100-112 — compile it into InformationalVersion
 dotnet build ... /p:InformationalVersion="$BUILD_LABEL"
 ```
 
@@ -135,7 +132,7 @@ This is the origin of the value that flows: **build label → `InformationalVers
 ### 4.1 Secretless login
 
 ```yaml
-# _deploy.yml:80-85
+# _deploy.yml:100-105
 - uses: azure/login@... 
   with:
     client-id: ${{ vars.AZURE_CLIENT_ID }}      # per-environment, from the env's variables
@@ -143,16 +140,16 @@ This is the origin of the value that flows: **build label → `InformationalVers
     subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 ```
 
-No secret appears anywhere. The job's `environment: ${{ inputs.environment }}` (`:62`) sets the OIDC token's `sub` claim, which Entra ID matches against a per-environment federated credential. Full mechanism: [`workload-identity-federation.md`](../workload-identity-federation.md).
+No secret appears anywhere. The job's `environment: ${{ inputs.environment }}` (`:91`) sets the OIDC token's `sub` claim, which Entra ID matches against a per-environment federated credential. Full mechanism: [`workload-identity-federation.md`](../workload-identity-federation.md).
 
 ### 4.2 The smoke test — the deploy verification contract in code
 
 ```bash
-# _deploy.yml:113-129 (staging slot) and 149-165 (post-deploy) — same contract
-for i in $(seq 1 12); do
-  BODY=$(curl -fsS --max-time 10 "$URL/v1/hello" || true)
+# _deploy.yml:242-265 (staged revision) and 285-306 (post-deploy) — same contract
+for i in $(seq 1 15); do
+  BODY=$(curl -fsS --max-time 30 "$URL/v1/hello" || true)
   if [ "$BODY" = "Hello World!" ]; then
-    DEPLOYED=$(curl -fsS "$URL/openapi/v1.json" | jq -r '.info.version // empty')
+    DEPLOYED=$(curl -fsS --max-time 30 "$URL/openapi/v1.json" | jq -r '.info.version // empty')
     if [ "$DEPLOYED" = "$EXPECTED" ] || [[ "$DEPLOYED" == "$EXPECTED"-* ]]; then
       exit 0        # healthy: right answer AND right build
     fi
@@ -162,23 +159,23 @@ done
 exit 1              # timed out → fail the deploy
 ```
 
-`[[ "$DEPLOYED" == "$EXPECTED"-* ]]` accepts a pre-release of the expected label — a promoted binary keeps its rc stamp (e.g. prod expects `1.6.0`, the byte-identical stg artifact reports `1.6.0-rc.3`), which is *correct* and must pass. A mismatch is retried (warm-up), not failed immediately.
+`[[ "$DEPLOYED" == "$EXPECTED"-* ]]` accepts a pre-release of the expected label — a promoted image keeps its candidate stamp (e.g. prod expects `1.6.0`, the byte-identical stg-tested image reports `1.6.0-build.187`), which is *correct* and must pass. A mismatch is retried (warm-up, and scale-to-zero cold starts), not failed immediately.
 
-### 4.3 Blue/green auto-swap-back
+### 4.3 Blue/green auto-shift-back
 
 ```yaml
-# _deploy.yml:167-179
-- name: Swap back after failed post-swap smoke test
-  if: ${{ failure() && steps.swap.outcome == 'success' }}
-  run: az webapp deployment slot swap --slot staging --target-slot production ...
+# _deploy.yml:308-321
+- name: Shift traffic back after failed post-shift smoke test
+  if: ${{ failure() && steps.shift.outcome == 'success' }}
+  run: az containerapp ingress traffic set ... --revision-weight "$PREVIOUS=100"
 ```
 
-The guard `steps.swap.outcome == 'success'` is load-bearing: a *pre*-swap failure (bad build caught in the slot) must **not** swap, and a non-slot deploy has nothing to restore. Recovery is automatic — the previous prod build comes back without a human.
+The guard `steps.shift.outcome == 'success'` is load-bearing: a *pre*-shift failure (bad image caught on the zero-traffic staged revision) must **not** touch traffic, and a single-revision deploy has nothing to shift back to. Recovery is automatic — the previous prod revision takes traffic again without a human.
 
 ### 4.4 Immutable deployment tags
 
 ```javascript
-// _deploy.yml:196-227 (github-script) — create-or-verify, never move
+// _deploy.yml:341-375 (github-script) — create-or-verify, never move
 try {
   await github.rest.git.createRef({ ref: `refs/tags/build/<env>/<label>`, sha });
 } catch (err) {
@@ -197,4 +194,4 @@ The tag is written on the commit the artifact was **built from** (`SOURCE_SHA`, 
 
 - **One value, threaded through every layer.** The build label is chosen in shell (`_build.yml`), compiled into the binary (`InformationalVersion`), re-emitted over HTTP (`Program.cs`), asserted by the deploy (`_deploy.yml`), and frozen as an immutable git tag. The code at each hop preserves that identity exactly.
 - **The contract is enforced by real HTTP, not mocks.** Integration tests and the deploy smoke test hit the same endpoints the same way, so "passes CI" and "works when deployed" test the same surface.
-- **Security properties live in small, load-bearing lines.** No stored secret (`vars.*` + `environment:`), no privilege to move a tag (create-or-verify), no swap on a pre-swap failure (the `steps.swap.outcome` guard). Each is a few lines carrying an architectural guarantee — worth reading carefully before editing.
+- **Security properties live in small, load-bearing lines.** No stored secret (`vars.*` + `environment:`), no privilege to move a tag (create-or-verify), no shift-back on a pre-shift failure (the `steps.shift.outcome` guard). Each is a few lines carrying an architectural guarantee — worth reading carefully before editing.

@@ -97,8 +97,8 @@ public class HelloWorldEndpointTests : IClassFixture<WebApplicationFactory<Progr
     [Fact]
     public async Task PathBase_UnprefixedRequests_StillServed()
     {
-        // UsePathBase must be tolerant: direct traffic (azurewebsites.net,
-        // custom domains, the pipeline's smoke tests) carries no prefix.
+        // UsePathBase must be tolerant: direct traffic (the Container App's
+        // FQDN, custom domains, the pipeline's smoke tests) carries no prefix.
         var client = PathBasedFactory().CreateClient();
 
         var response = await client.GetAsync("/v1/hello");

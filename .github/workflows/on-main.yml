@@ -16,7 +16,7 @@ on:
         type: boolean
         default: false
 
-# Serialize prod deploys — overlapping runs would race the slot swap. Queued
+# Serialize prod deploys — overlapping runs would race the traffic shift. Queued
 # runs wait; only the newest queued run is kept (superseded ones are dropped).
 concurrency:
   group: deploy-prod

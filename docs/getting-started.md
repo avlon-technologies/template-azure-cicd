@@ -112,15 +112,15 @@ On the `prod` environment, additionally configure — these are load-bearing con
 
 ### Self-hosted deploy runner
 
-`_deploy.yml` runs its deploy job on a **self-hosted runner** so deploys can egress from an IP the App Service deploy surfaces allowlist. Register at least one before your first deploy (Settings → Actions → Runners → New self-hosted runner), and treat it as **privileged infrastructure** — it handles the Azure access token for every environment, including prod:
+`_deploy.yml` runs its deploy job on a **self-hosted runner** so the smoke tests can egress from an IP the Container App's ingress allowlist admits. Register at least one before your first deploy (Settings → Actions → Runners → New self-hosted runner), and treat it as **privileged infrastructure** — it handles the Azure access token for every environment, including prod:
 
 - The runner machine needs the **Azure CLI (`az`)**, **GitHub CLI (`gh`)**, **`curl`**, and **`jq`** on its PATH (`gh` performs the pre-deploy image attestation verification).
 - **Dedicate it to this repository** (repo-level runner, or an org runner group restricted to this repo). Never share it with repos you trust less.
 - Prefer **ephemeral runners** (`--ephemeral`, one job per registration) or an image-per-job setup so no workspace or credential state survives a job. The pipeline defensively cleans its artifact directory, but ephemerality is the real control.
-- It must be able to reach the App Service deploy endpoints and the smoke-test URLs (`GATEWAY_URL` or the default hostnames).
+- It must be able to reach Azure's management endpoints, the container registry, and the smoke-test URLs (`GATEWAY_URL` or the Container App FQDNs).
 - **Running more than one runner?** Give each environment's runner a distinct label and pin deploys to it via `_deploy.yml`'s `runner-labels` input (e.g. pass `'["self-hosted", "prod-deploy"]'` from `on-main.yml`) so prod deploys only ever run on isolated prod runners. The default (`'["self-hosted"]'`) matches any self-hosted runner.
 
-If your App Services are reachable from the public internet and you don't need the allowlist model, you can instead change `runs-on` in `_deploy.yml` back to `ubuntu-latest` — see [customization](customization.md#2-workflow-values).
+If your Container Apps' ingress is reachable from the public internet and you don't need the allowlist model, you can instead change `runs-on` in `_deploy.yml` back to `ubuntu-latest` — see [customization](customization.md#2-workflow-values).
 
 ### Repository variables
 
@@ -163,11 +163,11 @@ git commit --allow-empty -m "Trigger first dev deploy"
 git push
 ```
 
-Watch Actions → **CI/CD — Develop → DEV**. The run should: build and test, deploy to your dev App Service, then pass the smoke test (`GET /v1/hello` returns `Hello World!` and `/openapi/v1.json` reports the build label, `YYYYMMDD.<run_number>`).
+Watch Actions → **CI/CD — Develop → DEV**. The run should: build and test, deploy to your dev Container App, then pass the smoke test (`GET /v1/hello` returns `Hello World!` and `/openapi/v1.json` reports the build label, `YYYYMMDD.<run_number>`).
 
 Verify: open `<dev gateway URL or Container App FQDN>/swagger` — the page shows the deployed build label, linked commit, and environment name.
 
-If the run fails, the [troubleshooting table](operations-manual.md#troubleshooting) maps the common failure messages to causes — the most frequent first-run issues are a missing `permissions:` grant (instant `startup_failure`), a deploy job stuck in "Queued" because no self-hosted runner is registered/online, an App Service that doesn't exist yet, and a federated-credential subject that doesn't exactly match the repo/environment.
+If the run fails, the [troubleshooting table](operations-manual.md#troubleshooting) maps the common failure messages to causes — the most frequent first-run issues are a missing `permissions:` grant (instant `startup_failure`), a deploy job stuck in "Queued" because no self-hosted runner is registered/online, a Container App that doesn't exist yet, and a federated-credential subject that doesn't exactly match the repo/environment.
 
 ## Step 6 — First release to stg and prod
 

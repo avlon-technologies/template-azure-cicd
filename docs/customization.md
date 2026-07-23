@@ -45,7 +45,7 @@ Every deploy is verified by two assertions in `_deploy.yml` (both the staged-rev
 When you replace the sample app, either:
 
 - **Keep the contract shape (recommended):** expose a cheap health/greeting endpoint and an OpenAPI document whose `info.version` reflects `InformationalVersion` — the wiring to copy is in `Api/Program.cs` (read the assembly attribute, split on `+`, stamp the OpenAPI document). This preserves the pipeline's strongest guarantee: a deploy only reports success when the *right build* is serving.
-- **Or edit both smoke-test steps** in `_deploy.yml` to assert whatever your app can answer. Don't delete the version assertion casually — without it, a swap that silently didn't take effect, or a wrong-artifact deploy, reports green.
+- **Or edit both smoke-test steps** in `_deploy.yml` to assert whatever your app can answer. Don't delete the version assertion casually — without it, a traffic shift that silently didn't take effect, or a wrong-image deploy, reports green.
 
 Also note: Swagger UI and the OpenAPI document are enabled in **all environments including prod** (`Api/Program.cs`) because this sample has no sensitive surface. For a real API, consider restricting them — but the smoke test reads `/openapi/v1.json`, so if you lock the spec down, adjust the version assertion too.
 
@@ -79,4 +79,4 @@ After adapting, sweep the docs for values that describe the reference deployment
 
 ## Out of scope for this repo
 
-The reference deployment's infrastructure (resource groups, App Service plans, App Services, managed identities) is provisioned by Terraform in the **platform repo `avlon-technologies/infrastructure`** (module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/`) — this repo contains no IaC. The pipeline only requires the resources listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources); provision them however your team prefers.
+The reference deployment's infrastructure (resource groups, Container Apps environments, Container Apps, managed identities) is provisioned by Terraform in the **platform repo `avlon-technologies/infrastructure`** (module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/`) — this repo contains no IaC. The pipeline only requires the resources listed in [getting-started — Step 2](getting-started.md#step-2--provision-azure-resources); provision them however your team prefers.

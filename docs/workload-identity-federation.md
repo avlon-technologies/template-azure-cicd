@@ -1,6 +1,6 @@
 # Workload Identity Federation
 
-This repo's pipelines deploy to Azure App Service without any stored credential — no client secret, no certificate. Instead, they use **workload identity federation** (GitHub OIDC): GitHub mints a signed JWT asserting the identity of each job, and Entra ID validates it against a pre-configured trust rule before issuing a short-lived access token.
+This repo's pipelines deploy to Azure Container Apps without any stored credential — no client secret, no certificate. Instead, they use **workload identity federation** (GitHub OIDC): GitHub mints a signed JWT asserting the identity of each job, and Entra ID validates it against a pre-configured trust rule before issuing a short-lived access token.
 
 ## Why not a client secret
 
@@ -13,7 +13,7 @@ sequenceDiagram
     participant Job as Deploy Job
     participant GH as GitHub OIDC
     participant Entra as Entra ID (Azure AD)
-    participant Azure as Azure App Service
+    participant Azure as Azure Container Apps
 
     Job->>GH: 1. Request ID token
     GH-->>Job: Signed token ("repo X, env prod")

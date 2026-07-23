@@ -17,7 +17,7 @@ graph TB
     end
 
     github[GitHub<br/>«external system»<br/>Source, Actions runners,<br/>OIDC issuer, Releases]
-    azure[Microsoft Azure<br/>«external system»<br/>App Service, Entra ID,<br/>managed identities]
+    azure[Microsoft Azure<br/>«external system»<br/>Container Apps, Entra ID,<br/>managed identities]
 
     consumer -->|HTTPS: GET /v1/hello, /swagger| api
     developer -->|Push commits, open PRs| api
@@ -40,7 +40,7 @@ graph TB
 | System | What we use it for | Why it's a dependency, not part of our system |
 |---|---|---|
 | **GitHub** | Source control, pull requests + branch rulesets (the quality gates), Actions (CI/CD compute), the OIDC token issuer for cloud auth, and GitHub Releases. | We consume it as a platform; we configure it but don't operate it. |
-| **Microsoft Azure** | The runtime: App Service hosts the API (each environment served directly at its `azurewebsites.net` URL), Entra ID (via user-assigned managed identities + federated credentials) authorizes deploys. | Managed cloud services; provisioned by Terraform in the platform repo, not built by us. |
+| **Microsoft Azure** | The runtime: Container Apps hosts the API (one scale-to-zero Container App per environment, behind an IP-allowlisted ingress), Entra ID (via user-assigned managed identities + federated credentials) authorizes deploys, and the shared container registry holds the images. | Managed cloud services; provisioned by Terraform in the platform repo, not built by us. |
 
 ## System boundary — what's in, what's out
 
@@ -50,7 +50,7 @@ graph TB
 - The contract each deploy must satisfy (smoke test + version assertion).
 
 **Outside the boundary** (depended upon, specified elsewhere):
-- The Azure runtime topology — resource groups, App Service plans, App Services, slots, and deploy identities — is provisioned by Terraform in the platform repo **`avlon-technologies/infrastructure`** (locally `../infrastructure`): module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/`. Deploys fail until that infrastructure exists for the target environment.
+- The Azure runtime topology — resource groups, Container Apps environments, Container Apps, the shared registry, and deploy identities — is provisioned by Terraform in the platform repo **`avlon-technologies/infrastructure`** (locally `../infrastructure`): module `infra/modules/cicd-demo/`, environment roots `infra/environments/cicd-demo/{dev,stg,prod}/`. Deploys fail until that infrastructure exists for the target environment.
 - GitHub repository settings (rulesets, workflow permissions, environment variables) — configured in the GitHub UI, documented in the [operations manual](../operations-manual.md), not code in this repo.
 
 ## Environments
