@@ -179,6 +179,7 @@ jobs:
       environment: stg
       build-label: ${{ needs.build.outputs.build-label }}
       artifact-name: webapp-${{ github.sha }}
+      image-repository: ${{ vars.IMAGE_REPOSITORY }}
       retention-days: 90
 
   deploy:
@@ -197,6 +198,7 @@ jobs:
       environment: stg
       build-label: ${{ needs.prepare.outputs.promote-run-id != '' && needs.prepare.outputs.version || needs.build.outputs.build-label }}
       image-digest: ${{ needs.prepare.outputs.promote-image-digest || needs.image.outputs.image-digest }}
+      image-repository: ${{ vars.IMAGE_REPOSITORY }}
       # stg tags are the prod promotion gate's proof of a green staging
       # deploy and the QA/UAT audit trail.
       tag-deployment: true

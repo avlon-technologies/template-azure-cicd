@@ -218,6 +218,7 @@ jobs:
     with:
       environment: prod
       build-label: ${{ needs.build.outputs.build-label }}
+      image-repository: ${{ vars.IMAGE_REPOSITORY }}
 
   deploy:
     needs: [prepare, build, image]
@@ -236,6 +237,7 @@ jobs:
       # its revision FQDN, then shift traffic (shift back on failure).
       traffic-shift: true
       image-digest: ${{ needs.prepare.outputs.promote-image-digest || needs.image.outputs.image-digest }}
+      image-repository: ${{ vars.IMAGE_REPOSITORY }}
       # Tag the release-branch commit the image was built from (empty on
       # the rebuild path — _deploy.yml then tags this run's HEAD).
       source-sha: ${{ needs.prepare.outputs.promote-sha }}
